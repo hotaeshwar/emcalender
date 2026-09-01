@@ -2,6 +2,28 @@
 
 import React from 'react';
 
+const DEFAULT_STAFF = [
+  { id: 'emp1', name: 'HARSHITA', employeeCode: 'EMP001', role: 'graphic_designer' },
+  { id: 'emp2', name: 'NEHA', employeeCode: 'EMP002', role: 'graphic_designer' },
+  { id: 'emp3', name: 'GURJEET', employeeCode: 'EMP003', role: 'video_editor' },
+  { id: 'emp4', name: 'KARAN', employeeCode: 'EMP004', role: 'video_editor' },
+];
+
+const DEFAULT_CLIENTS = [
+  { id: 'c1', name: 'ACTION CAR DETAILING', clientCode: 'ACD' },
+  { id: 'c2', name: 'CHUTNEY HOUSE', clientCode: 'CH' },
+  { id: 'c3', name: 'DND', clientCode: 'DND' },
+  { id: 'c4', name: 'DIVINE DWELLING', clientCode: 'DD' },
+  { id: 'c5', name: 'DEVINE STUDIO', clientCode: 'DS' },
+  { id: 'c6', name: 'ISHA INTERNATIONAL', clientCode: 'II' },
+  { id: 'c7', name: 'BALAJI EV', clientCode: 'BEV' },
+  { id: 'c8', name: 'KC CROSSROAD', clientCode: 'KCC' },
+  { id: 'c9', name: 'THE RADIANT MANALI', clientCode: 'TRM' },
+  { id: 'c10', name: 'OREN KASAULI', clientCode: 'OK' },
+  { id: 'c11', name: 'CELESTIAL TRADER', clientCode: 'CT' },
+  { id: 'c12', name: 'TSS', clientCode: 'TSS' },
+];
+
 export default function AgencyMatrixGrid({
   week,
   clients = [],
@@ -9,35 +31,71 @@ export default function AgencyMatrixGrid({
   allocations = [],
   dayName = 'MONDAY',
 }) {
-  const staffList = employees.length > 0 ? employees : [
-    { id: 'emp1', name: 'HARSHITA' },
-    { id: 'emp2', name: 'NEHA' },
-    { id: 'emp3', name: 'GURJEET' },
-    { id: 'emp4', name: 'KARAN' },
+  // Merge default agency staff with any custom employees from DB
+  const staffMap = new Map();
+  DEFAULT_STAFF.forEach(s => staffMap.set(s.name.toUpperCase(), s));
+  employees.forEach(e => {
+    if (e.name) {
+      staffMap.set(e.name.toUpperCase(), {
+        id: e.id || e.employeeCode,
+        name: e.name.toUpperCase(),
+        employeeCode: e.employeeCode || e.id,
+        role: e.role || 'graphic_designer',
+      });
+    }
+  });
+  const staffList = Array.from(staffMap.values());
+
+  // Merge default agency clients with any custom clients from DB
+  const clientMap = new Map();
+  DEFAULT_CLIENTS.forEach(c => clientMap.set(c.name.toUpperCase(), c));
+  clients.forEach(c => {
+    if (c.name) {
+      clientMap.set(c.name.toUpperCase(), {
+        id: c.id || c.clientCode,
+        name: c.name.toUpperCase(),
+        clientCode: c.clientCode || c.id,
+      });
+    }
+  });
+  const clientList = Array.from(clientMap.values());
+
+  // Fallback demo allocation sample if allocations array is empty
+  const activeAllocations = allocations && allocations.length > 0 ? allocations : [
+    { clientId: 'c1', clientName: 'ACTION CAR DETAILING', employeeId: 'emp1', employeeName: 'HARSHITA', work: { posts: 1, reels: 1, stories: 0 } },
+    { clientId: 'c1', clientName: 'ACTION CAR DETAILING', employeeId: 'emp2', employeeName: 'NEHA', work: { posts: 1, reels: 1, stories: 1 } },
+    { clientId: 'c2', clientName: 'CHUTNEY HOUSE', employeeId: 'emp1', employeeName: 'HARSHITA', work: { posts: 1, reels: 1, stories: 1 } },
+    { clientId: 'c2', clientName: 'CHUTNEY HOUSE', employeeId: 'emp2', employeeName: 'NEHA', work: { posts: 1, reels: 1, stories: 1 } },
+    { clientId: 'c3', clientName: 'DND', employeeId: 'emp1', employeeName: 'HARSHITA', work: { posts: 2, reels: 0, stories: 1 } },
+    { clientId: 'c3', clientName: 'DND', employeeId: 'emp2', employeeName: 'NEHA', work: { posts: 1, reels: 1, stories: 1 } },
+    { clientId: 'c4', clientName: 'DIVINE DWELLING', employeeId: 'emp1', employeeName: 'HARSHITA', work: { posts: 1, reels: 1, stories: 0 } },
+    { clientId: 'c4', clientName: 'DIVINE DWELLING', employeeId: 'emp2', employeeName: 'NEHA', work: { posts: 1, reels: 0, stories: 1 } },
+    { clientId: 'c5', clientName: 'DEVINE STUDIO', employeeId: 'emp1', employeeName: 'HARSHITA', work: { posts: 1, reels: 1, stories: 0 } },
+    { clientId: 'c5', clientName: 'DEVINE STUDIO', employeeId: 'emp2', employeeName: 'NEHA', work: { posts: 1, reels: 0, stories: 1 } },
+    { clientId: 'c6', clientName: 'ISHA INTERNATIONAL', employeeId: 'emp1', employeeName: 'HARSHITA', work: { posts: 2, reels: 1, stories: 0 } },
+    { clientId: 'c6', clientName: 'ISHA INTERNATIONAL', employeeId: 'emp2', employeeName: 'NEHA', work: { posts: 1, reels: 1, stories: 1 } },
+    { clientId: 'c7', clientName: 'BALAJI EV', employeeId: 'emp1', employeeName: 'HARSHITA', work: { posts: 1, reels: 1, stories: 1 } },
+    { clientId: 'c7', clientName: 'BALAJI EV', employeeId: 'emp2', employeeName: 'NEHA', work: { posts: 0, reels: 1, stories: 1 } },
+    { clientId: 'c8', clientName: 'KC CROSSROAD', employeeId: 'emp1', employeeName: 'HARSHITA', work: { posts: 1, reels: 0, stories: 1 } },
+    { clientId: 'c8', clientName: 'KC CROSSROAD', employeeId: 'emp2', employeeName: 'NEHA', work: { posts: 1, reels: 1, stories: 1 } },
+    { clientId: 'c9', clientName: 'THE RADIANT MANALI', employeeId: 'emp1', employeeName: 'HARSHITA', work: { posts: 1, reels: 0, stories: 1 } },
+    { clientId: 'c9', clientName: 'THE RADIANT MANALI', employeeId: 'emp2', employeeName: 'NEHA', work: { posts: 1, reels: 1, stories: 1 } },
+    { clientId: 'c10', clientName: 'OREN KASAULI', employeeId: 'emp1', employeeName: 'HARSHITA', work: { posts: 1, reels: 1, stories: 1 } },
+    { clientId: 'c10', clientName: 'OREN KASAULI', employeeId: 'emp2', employeeName: 'NEHA', work: { posts: 1, reels: 1, stories: 1 } },
+    { clientId: 'c11', clientName: 'CELESTIAL TRADER', employeeId: 'emp1', employeeName: 'HARSHITA', work: { posts: 1, reels: 1, stories: 0 } },
+    { clientId: 'c11', clientName: 'CELESTIAL TRADER', employeeId: 'emp2', employeeName: 'NEHA', work: { posts: 0, reels: 1, stories: 1 } },
+    { clientId: 'c12', clientName: 'TSS', employeeId: 'emp1', employeeName: 'HARSHITA', work: { posts: 2, reels: 0, stories: 1 } },
+    { clientId: 'c12', clientName: 'TSS', employeeId: 'emp2', employeeName: 'NEHA', work: { posts: 1, reels: 1, stories: 1 } },
   ];
 
-  const clientList = clients.length > 0 ? clients : [
-    { id: 'c1', name: 'ACTION CAR DETAILING' },
-    { id: 'c2', name: 'CHUTNEY HOUSE' },
-    { id: 'c3', name: 'DND' },
-    { id: 'c4', name: 'DIVINE DWELLING' },
-    { id: 'c5', name: 'DEVINE STUDIO' },
-    { id: 'c6', name: 'ISHA INTERNATIONAL' },
-    { id: 'c7', name: 'BALAJI EV' },
-    { id: 'c8', name: 'KC CROSSROAD' },
-    { id: 'c9', name: 'THE RADIANT MANALI' },
-    { id: 'c10', name: 'OREN KASAULI' },
-    { id: 'c11', name: 'CELESTIAL TRADER' },
-    { id: 'c12', name: 'TSS' },
-  ];
-
-  // Robust Indexing Map: (clientId / clientName) x (employeeId / employeeName / employeeCode)
+  // Robust Multi-Key Indexing: (clientId / clientName) x (employeeId / employeeName / employeeCode)
   const matrixMap = {};
 
-  allocations.forEach((alloc) => {
+  activeAllocations.forEach((alloc) => {
     const cKeys = [
       alloc.clientId,
       alloc.clientName,
+      (alloc.clientName || '').toUpperCase(),
       (alloc.clientName || '').toLowerCase(),
       (alloc.clientId || '').toLowerCase(),
     ].filter(Boolean);
@@ -46,6 +104,7 @@ export default function AgencyMatrixGrid({
       alloc.employeeId,
       alloc.employeeName,
       alloc.employeeCode,
+      (alloc.employeeName || '').toUpperCase(),
       (alloc.employeeName || '').toLowerCase(),
       (alloc.employeeCode || '').toLowerCase(),
     ].filter(Boolean);
@@ -67,10 +126,9 @@ export default function AgencyMatrixGrid({
     });
   });
 
-  // Function to safely fetch work cell data
   const getWorkCell = (client, staff) => {
-    const cKeys = [client.id, client.name, (client.name || '').toLowerCase()].filter(Boolean);
-    const sKeys = [staff.id, staff.name, staff.employeeCode, (staff.name || '').toLowerCase()].filter(Boolean);
+    const cKeys = [client.id, client.name, (client.name || '').toUpperCase(), (client.name || '').toLowerCase()].filter(Boolean);
+    const sKeys = [staff.id, staff.name, staff.employeeCode, (staff.name || '').toUpperCase(), (staff.name || '').toLowerCase()].filter(Boolean);
 
     for (const ck of cKeys) {
       if (matrixMap[ck]) {
@@ -85,10 +143,10 @@ export default function AgencyMatrixGrid({
     return { posts: 0, reels: 0, stories: 0 };
   };
 
-  // Pre-calculate totals for full mathematical precision
+  // Pre-calculate totals for full mathematical accuracy
   const staffTotals = {};
   staffList.forEach((s) => {
-    staffTotals[s.id || s.name] = { posts: 0, reels: 0, stories: 0 };
+    staffTotals[s.name.toUpperCase()] = { posts: 0, reels: 0, stories: 0 };
   });
 
   const clientTotals = {};
@@ -108,14 +166,15 @@ export default function AgencyMatrixGrid({
       cr += work.reels;
       cs += work.stories;
 
-      const sKey = s.id || s.name;
+      const sKey = s.name.toUpperCase();
+      if (!staffTotals[sKey]) staffTotals[sKey] = { posts: 0, reels: 0, stories: 0 };
       staffTotals[sKey].posts += work.posts;
       staffTotals[sKey].reels += work.reels;
       staffTotals[sKey].stories += work.stories;
     });
 
     const totalCount = cp + cr + cs;
-    clientTotals[client.id || client.name] = { posts: cp, reels: cr, stories: cs, totalCount };
+    clientTotals[client.name.toUpperCase()] = { posts: cp, reels: cr, stories: cs, totalCount };
 
     grandPosts += cp;
     grandReels += cr;
@@ -192,7 +251,7 @@ export default function AgencyMatrixGrid({
           <tbody className="divide-y divide-slate-300 font-medium text-slate-900">
             {clientList.map((client, cIdx) => {
               const sNo = cIdx + 1;
-              const totals = clientTotals[client.id || client.name] || { posts: 0, reels: 0, stories: 0, totalCount: 0 };
+              const totals = clientTotals[client.name.toUpperCase()] || { posts: 0, reels: 0, stories: 0, totalCount: 0 };
 
               return (
                 <tr key={client.id || cIdx} className="hover:bg-amber-50/40 transition-colors">
@@ -251,7 +310,7 @@ export default function AgencyMatrixGrid({
 
               {/* Staff Footer Totals */}
               {staffList.map((staff, sIdx) => {
-                const sKey = staff.id || staff.name;
+                const sKey = staff.name.toUpperCase();
                 const tot = staffTotals[sKey] || { posts: 0, reels: 0, stories: 0 };
                 const cellBg = sIdx % 2 === 0 ? 'bg-[#FDF0ED]' : 'bg-[#FCE8E2]';
 

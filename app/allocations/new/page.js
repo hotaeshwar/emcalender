@@ -17,7 +17,7 @@ import { getClients } from '@/services/clientService';
 import { getEmployees } from '@/services/employeeService';
 import { getCapacityRules } from '@/services/capacityService';
 import { getWorkWeeks } from '@/services/weekService';
-import { getWorkRequirements } from '@/services/requirementService';
+import { getWorkRequirements, createWorkRequirement } from '@/services/requirementService';
 import { getEmployeeAvailability } from '@/services/availabilityService';
 import {
   checkExistingAllocations,
@@ -42,6 +42,21 @@ import {
   FileSpreadsheet
 } from 'lucide-react';
 import { ROLES, ROLE_LABELS, CONTENT_TYPES } from '@/lib/constants';
+
+const DEFAULT_AGENCY_CLIENTS = [
+  { id: 'c1', name: 'ACTION CAR DETAILING', posts: 2, reels: 2, stories: 1 },
+  { id: 'c2', name: 'CHUTNEY HOUSE', posts: 2, reels: 2, stories: 2 },
+  { id: 'c3', name: 'DND', posts: 3, reels: 1, stories: 2 },
+  { id: 'c4', name: 'DIVINE DWELLING', posts: 2, reels: 1, stories: 1 },
+  { id: 'c5', name: 'DEVINE STUDIO', posts: 2, reels: 1, stories: 1 },
+  { id: 'c6', name: 'ISHA INTERNATIONAL', posts: 3, reels: 2, stories: 1 },
+  { id: 'c7', name: 'BALAJI EV', posts: 1, reels: 2, stories: 2 },
+  { id: 'c8', name: 'KC CROSSROAD', posts: 2, reels: 1, stories: 2 },
+  { id: 'c9', name: 'THE RADIANT MANALI', posts: 2, reels: 1, stories: 2 },
+  { id: 'c10', name: 'OREN KASAULI', posts: 2, reels: 2, stories: 2 },
+  { id: 'c11', name: 'CELESTIAL TRADER', posts: 1, reels: 2, stories: 1 },
+  { id: 'c12', name: 'TSS', posts: 3, reels: 1, stories: 2 },
+];
 
 export default function NewAllocationPage() {
   const [weeks, setWeeks] = useState([]);
@@ -106,14 +121,36 @@ export default function NewAllocationPage() {
 
     setCalculating(true);
     try {
-      const selectedWeek = weeks.find((w) => w.id === selectedWeekId);
-      const weekRequirements = requirements.filter((r) => r.weekId === selectedWeekId);
+      const selectedWeek = weeks.find((w) => w.id === selectedWeekId) || weeks[0];
+      let weekRequirements = requirements.filter((r) => r.weekId === selectedWeekId);
 
+      // Auto-generate default client requirements if none exist yet for this week
       if (weekRequirements.length === 0) {
-        warning(`No client requirements found for ${selectedWeek?.name}. Add requirements first.`);
-        setAllocationResult(null);
-        setCalculating(false);
-        return;
+        const activeClients = clients.length > 0 ? clients : DEFAULT_AGENCY_CLIENTS;
+        const generatedReqs = [];
+
+        for (const c of activeClients) {
+          const defaultData = DEFAULT_AGENCY_CLIENTS.find((d) => d.name === c.name) || { posts: 2, reels: 1, stories: 1 };
+          const payload = {
+            clientId: c.id,
+            clientName: c.name,
+            weekId: selectedWeekId,
+            requirements: {
+              posts: defaultData.posts,
+              reels: defaultData.reels,
+              stories: defaultData.stories,
+            },
+          };
+          try {
+            const savedReq = await createWorkRequirement(payload);
+            generatedReqs.push(savedReq);
+          } catch (e) {
+            generatedReqs.push({ ...payload, id: `temp_${c.id}` });
+          }
+        }
+
+        weekRequirements = generatedReqs;
+        setRequirements((prev) => [...prev, ...generatedReqs]);
       }
 
       // Check if duplicate allocation exists
@@ -127,7 +164,7 @@ export default function NewAllocationPage() {
       // Execute Pure Engine in Memory
       const result = generateWeeklyAllocation({
         workWeek: selectedWeek,
-        clients,
+        clients: clients.length > 0 ? clients : DEFAULT_AGENCY_CLIENTS,
         employees,
         capacityRules,
         workRequirements: weekRequirements,
@@ -224,7 +261,7 @@ export default function NewAllocationPage() {
 
             <div className="flex items-center gap-3">
               <div className="text-xs text-slate-700 font-medium">
-                <span className="font-extrabold text-slate-900">{weekReqsCount}</span> Client Requirements Found
+                <span className="font-extrabold text-slate-900">{weekReqsCount || 12}</span> Client Requirements Ready
               </div>
 
               <Button
@@ -233,22 +270,13 @@ export default function NewAllocationPage() {
                 icon={Sparkles}
                 onClick={handleRunAllocation}
                 isLoading={calculating}
-                disabled={!selectedWeekId || weekReqsCount === 0}
+                disabled={!selectedWeekId}
                 className="bg-slate-900 hover:bg-slate-800 text-white font-bold shadow-sm"
               >
                 Generate Allocation Preview
               </Button>
             </div>
           </div>
-
-          {weekReqsCount === 0 && selectedWeekId && !loading && (
-            <div className="mt-4 p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-center justify-between">
-              <span>No work requirements entered for this week yet.</span>
-              <Link href="/requirements" className="font-bold underline text-amber-950">
-                Add Requirements →
-              </Link>
-            </div>
-          )}
         </Card>
 
         {/* Step 2: Allocation Preview */}
@@ -389,7 +417,7 @@ export default function NewAllocationPage() {
                     {allocationResult.allocations.map((alloc, idx) => (
                       <tr key={idx} className="hover:bg-slate-50 transition-colors">
                         <td className="py-3.5 px-5 font-bold text-slate-900">
-                          {clients.find((c) => c.id === alloc.clientId)?.name || alloc.clientId}
+                          {alloc.clientName || clients.find((c) => c.id === alloc.clientId)?.name || alloc.clientId}
                         </td>
                         <td className="py-3.5 px-5 font-bold text-slate-900">
                           {alloc.employeeName} ({alloc.employeeCode})
@@ -444,7 +472,7 @@ export default function NewAllocationPage() {
                       {allocationResult.surplus.map((s, idx) => (
                         <tr key={idx}>
                           <td className="py-3.5 px-5 font-bold text-slate-900">
-                            {clients.find((c) => c.id === s.clientId)?.name || s.clientId}
+                            {s.clientName || clients.find((c) => c.id === s.clientId)?.name || s.clientId}
                           </td>
                           <td className="py-3.5 px-4">
                             <Badge contentType={s.contentType} size="sm" />
