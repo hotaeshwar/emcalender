@@ -7,10 +7,12 @@ import Button from '@/components/common/Button';
 import Select from '@/components/common/Select';
 import Badge from '@/components/common/Badge';
 import ProgressBar from '@/components/common/ProgressBar';
+import AgencyMatrixGrid from '@/components/common/AgencyMatrixGrid';
 import DownloadExcelButton from '@/components/common/DownloadExcelButton';
 import { SkeletonTable } from '@/components/common/LoadingSkeleton';
 import EmptyState from '@/components/common/EmptyState';
 import { subscribeEmployees } from '@/services/employeeService';
+import { subscribeClients } from '@/services/clientService';
 import { subscribeWorkWeeks } from '@/services/weekService';
 import { subscribeAllocations } from '@/services/allocationService';
 import { subscribeEmployeeAvailability } from '@/services/availabilityService';
@@ -31,33 +33,23 @@ import {
   AlertTriangle,
   UserX,
   Sparkles,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Layers,
+  Table
 } from 'lucide-react';
 import { ROLES, AVAILABILITY_TYPES } from '@/lib/constants';
 
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-function formatDayHeader(dateStr) {
-  if (!dateStr) return { dayName: '', formatted: '' };
-  try {
-    const parts = dateStr.split('-');
-    if (parts.length !== 3) return { dayName: '', formatted: dateStr };
-    const date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-    const dayName = DAY_NAMES[date.getDay()];
-    const formatted = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    return { dayName, formatted };
-  } catch (e) {
-    return { dayName: '', formatted: dateStr };
-  }
-}
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 export default function WorkloadMatrixPage() {
   const [employees, setEmployees] = useState([]);
+  const [clients, setClients] = useState([]);
   const [weeks, setWeeks] = useState([]);
   const [allocations, setAllocations] = useState([]);
   const [availabilityList, setAvailabilityList] = useState([]);
   const [capacityRules, setCapacityRules] = useState([]);
   const [selectedWeekId, setSelectedWeekId] = useState('');
+  const [activeTab, setActiveTab] = useState('grid'); // 'grid' | 'heatmap'
   const [loading, setLoading] = useState(true);
 
   const { success, error } = useToast();
@@ -67,6 +59,8 @@ export default function WorkloadMatrixPage() {
       setEmployees(data || []);
       setLoading(false);
     });
+
+    const unsubClients = subscribeClients(setClients);
 
     const unsubWeeks = subscribeWorkWeeks((data) => {
       setWeeks(data || []);
@@ -81,6 +75,7 @@ export default function WorkloadMatrixPage() {
 
     return () => {
       if (unsubEmp) unsubEmp();
+      if (unsubClients) unsubClients();
       if (unsubWeeks) unsubWeeks();
       if (unsubAlloc) unsubAlloc();
       if (unsubAvail) unsubAvail();
@@ -95,8 +90,12 @@ export default function WorkloadMatrixPage() {
   const holidays = selectedWeek?.holidays || [];
   const holidayDateSet = new Set(holidays.map((h) => h.holidayDate || h.date));
 
+  const filteredAllocations = selectedWeekId
+    ? allocations.filter((a) => a.weekId === selectedWeekId)
+    : allocations;
+
   const handleExportMatrixExcel = () => {
-    if (!selectedWeek || activeEmployees.length === 0) {
+    if (!selectedWeek) {
       error('No matrix data available to export.');
       return;
     }
@@ -104,26 +103,27 @@ export default function WorkloadMatrixPage() {
     exportMatrixReport({
       week: selectedWeek,
       activeEmployees,
-      allocations,
+      allocations: filteredAllocations,
       availabilityList,
       holidays,
+      clients,
     });
-    success('Color-coded Excel matrix heatmap downloaded successfully!');
+    success('Color-coded Excel matrix downloaded in exact agency format!');
   };
 
   return (
     <AppLayout
-      title="Workload Heatmap Matrix"
-      subtitle="Visual grid of employee capacity and daily distribution across selected work week dates"
+      title="Bid Employee Work Distributer Matrix"
+      subtitle="Client × Staff work distribution matrix and workload capacity heatmap"
     >
       <div className="space-y-6 bg-white">
-        {/* Week Selector Bar with Animated Download Button */}
+        {/* Controls Bar with Tabs & Download Button */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-4 rounded-2xl bg-white border border-slate-200 shadow-sm">
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-              Select Matrix Week:
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">
+              Select Week:
             </span>
-            <div className="w-64">
+            <div className="w-60">
               <Select
                 value={selectedWeekId}
                 onChange={(e) => setSelectedWeekId(e.target.value)}
@@ -132,6 +132,34 @@ export default function WorkloadMatrixPage() {
                   label: `${w.name} (${w.startDate})`,
                 }))}
               />
+            </div>
+
+            {/* View Mode Toggle Tabs */}
+            <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200">
+              <button
+                type="button"
+                onClick={() => setActiveTab('grid')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition-all ${
+                  activeTab === 'grid'
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+                }`}
+              >
+                <Table className="w-3.5 h-3.5" />
+                <span>Matrix Table View</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('heatmap')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition-all ${
+                  activeTab === 'heatmap'
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>Daily Heatmap</span>
+              </button>
             </div>
           </div>
 
@@ -144,33 +172,39 @@ export default function WorkloadMatrixPage() {
           </div>
         </div>
 
-        {/* Matrix Card */}
         {loading ? (
-          <SkeletonTable rows={5} cols={6} />
-        ) : activeEmployees.length === 0 ? (
-          <EmptyState
-            icon={Users}
-            title="No Active Employees"
-            description="Add active employees to visualize the matrix."
-          />
-        ) : !selectedWeek || workingDates.length === 0 ? (
-          <EmptyState
-            icon={Calendar}
-            title="No Working Dates"
-            description="Configure working dates for this week in the Calendar section."
-          />
+          <SkeletonTable rows={6} cols={7} />
+        ) : activeTab === 'grid' ? (
+          /* Exact Matrix Grid Format Matching User Image */
+          <div className="space-y-3">
+            <div className="flex items-center justify-between px-1">
+              <span className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">
+                Distribution Schedule Matrix ({selectedWeek?.name || 'Active Week'})
+              </span>
+              <span className="text-xs text-slate-600 font-bold">
+                {clients.length} Clients • {activeEmployees.length} Staff Members
+              </span>
+            </div>
+
+            <AgencyMatrixGrid
+              week={selectedWeek}
+              clients={clients}
+              employees={activeEmployees}
+              allocations={filteredAllocations}
+              dayName="MONDAY"
+            />
+          </div>
         ) : (
+          /* Daily Heatmap View */
           <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">
                     <th className="py-3.5 px-6 min-w-[200px]">Employee</th>
                     <th className="py-3.5 px-4 min-w-[120px]">Role</th>
                     {workingDates.map((dateStr) => {
                       const isHoliday = holidayDateSet.has(dateStr);
-                      const { dayName, formatted } = formatDayHeader(dateStr);
-
                       return (
                         <th
                           key={dateStr}
@@ -178,8 +212,7 @@ export default function WorkloadMatrixPage() {
                             isHoliday ? 'bg-amber-100/70 text-amber-950 font-bold' : ''
                           }`}
                         >
-                          <span className="font-extrabold text-xs text-slate-900 block">{dayName}</span>
-                          <p className="font-mono text-[11px] text-slate-600 font-semibold">{formatted}</p>
+                          <span className="font-black text-xs text-slate-900 block">{dateStr}</span>
                           {isHoliday && <span className="text-[10px] text-amber-900 font-extrabold block">Holiday</span>}
                         </th>
                       );
@@ -189,8 +222,8 @@ export default function WorkloadMatrixPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-sm">
                   {activeEmployees.map((emp) => {
-                    const empAllocations = allocations.filter(
-                      (a) => a.employeeId === emp.id && a.weekId === selectedWeek.id
+                    const empAllocations = filteredAllocations.filter(
+                      (a) => a.employeeId === emp.id
                     );
 
                     let totalPosts = 0;
@@ -208,21 +241,19 @@ export default function WorkloadMatrixPage() {
                     const dailyBaseCap = calculateDailyEmployeeCapacity(emp, capacityRules);
                     const { effectiveWorkingDates } = getEffectiveWorkingDays(selectedWeek, holidays);
                     const empWeekCap = calculateWeeklyEmployeeCapacity(emp, capacityRules, effectiveWorkingDates, availabilityList);
-
                     const weekUtilization = calculateUtilization(totalUnitsUsed, empWeekCap.weeklyCapacityUnits);
 
                     return (
                       <tr key={emp.id} className="hover:bg-slate-50 transition-colors">
                         <td className="py-4 px-6 font-bold text-slate-900">
                           <p>{emp.name}</p>
-                          <p className="text-[11px] font-mono text-slate-500 font-semibold">{emp.employeeCode}</p>
+                          <p className="text-[11px] font-mono text-slate-500 font-bold">{emp.employeeCode}</p>
                         </td>
 
                         <td className="py-4 px-4">
                           <Badge role={emp.role} size="sm" />
                         </td>
 
-                        {/* Working Date Columns */}
                         {workingDates.map((dateStr) => {
                           const isHoliday = holidayDateSet.has(dateStr);
                           const avail = availabilityList.find(
@@ -232,9 +263,7 @@ export default function WorkloadMatrixPage() {
                           if (isHoliday) {
                             return (
                               <td key={dateStr} className="py-4 px-4 text-center bg-amber-50">
-                                <span className="text-xs font-bold text-amber-800">
-                                  🏖️ Holiday
-                                </span>
+                                <span className="text-xs font-extrabold text-amber-900">🏖️ Holiday</span>
                               </td>
                             );
                           }
@@ -242,46 +271,25 @@ export default function WorkloadMatrixPage() {
                           if (avail && avail.availability === AVAILABILITY_TYPES.LEAVE) {
                             return (
                               <td key={dateStr} className="py-4 px-4 text-center bg-rose-50">
-                                <span className="text-xs font-bold text-rose-700">
-                                  🌴 Leave (0x)
-                                </span>
+                                <span className="text-xs font-extrabold text-rose-800">🌴 Leave (0x)</span>
                               </td>
                             );
                           }
 
-                          if (avail && avail.availability === AVAILABILITY_TYPES.HALF_DAY) {
-                            return (
-                              <td key={dateStr} className="py-4 px-4 text-center bg-amber-50">
-                                <span className="text-xs font-bold text-amber-700">
-                                  ⏳ Half Day (0.5x)
-                                </span>
-                              </td>
-                            );
-                          }
-
-                          // Active Working Day Cell
                           return (
                             <td key={dateStr} className="py-4 px-4 text-center">
                               <div className="p-2 rounded-xl bg-slate-50 border border-slate-200">
-                                <span className="text-xs font-extrabold text-slate-900">
-                                  {weekUtilization}%
-                                </span>
-                                <p className="text-[10px] text-slate-600 mt-0.5 font-bold">
-                                  {dailyBaseCap} Units/Day
-                                </p>
+                                <span className="text-xs font-black text-slate-900">{weekUtilization}%</span>
+                                <p className="text-[10px] text-slate-600 font-bold">{dailyBaseCap} Units/Day</p>
                               </div>
                             </td>
                           );
                         })}
 
-                        <td className="py-4 px-6 text-right">
+                        <td className="py-4 px-6 text-right font-bold text-slate-900">
                           <div>
-                            <span className="text-sm font-extrabold text-slate-900">
-                              {weekUtilization}%
-                            </span>
-                            <p className="text-[11px] text-slate-600 font-bold">
-                              {totalUnitsUsed} / {empWeekCap.weeklyCapacityUnits} Units
-                            </p>
+                            <span className="text-sm font-black">{weekUtilization}%</span>
+                            <p className="text-[11px] text-slate-600 font-bold">{totalUnitsUsed} / {empWeekCap.weeklyCapacityUnits} Units</p>
                           </div>
                         </td>
                       </tr>
