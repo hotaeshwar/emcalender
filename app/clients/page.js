@@ -93,7 +93,7 @@ export default function ClientsPage() {
 
   const handleSave = async (e) => {
     e.preventDefault();
-    const validation = validateClient(formData);
+    const validation = validateClient(formData, clients, editingClient?.id);
     if (!validation.isValid) {
       setErrors(validation.errors);
       return;
@@ -113,7 +113,11 @@ export default function ClientsPage() {
       setIsModalOpen(false);
     } catch (err) {
       console.error('Error saving client:', err);
-      error('Failed to save client. Please try again.');
+      if (err.message && err.message.includes('Client Code')) {
+        setErrors({ clientCode: err.message });
+      } else {
+        error(err.message || 'Failed to save client. Please try again.');
+      }
     } finally {
       setIsSaving(false);
     }
@@ -177,7 +181,7 @@ export default function ClientsPage() {
             variant="primary"
             icon={Plus}
             onClick={openCreateModal}
-            className="flex-shrink-0 bg-slate-900 hover:bg-slate-800 text-white font-semibold"
+            className="flex-shrink-0 bg-slate-900 hover:bg-slate-800 text-white font-extrabold"
           >
             Add New Client
           </Button>
@@ -204,9 +208,9 @@ export default function ClientsPage() {
             <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
                     <th className="py-3.5 px-6">Client Name</th>
-                    <th className="py-3.5 px-6">Client Code</th>
+                    <th className="py-3.5 px-6">Unique Client Code</th>
                     <th className="py-3.5 px-6">Status</th>
                     <th className="py-3.5 px-6">Description</th>
                     <th className="py-3.5 px-6 text-right">Actions</th>
@@ -217,22 +221,22 @@ export default function ClientsPage() {
                     <tr key={client.id} className="hover:bg-slate-50 transition-colors">
                       <td className="py-4 px-6">
                         <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-xl bg-slate-100 text-slate-700 font-extrabold flex items-center justify-center text-xs">
+                          <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-800 font-extrabold flex items-center justify-center text-xs border border-indigo-200">
                             {client.name.charAt(0).toUpperCase()}
                           </div>
                           <div>
-                            <p className="font-bold text-slate-900">
+                            <p className="font-extrabold text-slate-900">
                               {client.name}
                             </p>
-                            <p className="text-[11px] text-slate-400 font-mono">
+                            <p className="text-[11px] text-slate-500 font-mono font-semibold">
                               ID: {client.id.substring(0, 8)}...
                             </p>
                           </div>
                         </div>
                       </td>
-                      <td className="py-4 px-6 font-mono text-xs font-bold text-slate-700">
+                      <td className="py-4 px-6 font-mono text-xs font-bold text-slate-800">
                         {client.clientCode ? (
-                          <span className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200">
+                          <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-900 border border-slate-300 font-extrabold">
                             {client.clientCode}
                           </span>
                         ) : (
@@ -244,7 +248,7 @@ export default function ClientsPage() {
                           {client.status === 'active' ? 'Active' : 'Inactive'}
                         </Badge>
                       </td>
-                      <td className="py-4 px-6 text-xs text-slate-600 max-w-xs truncate">
+                      <td className="py-4 px-6 text-xs text-slate-600 font-medium max-w-xs truncate">
                         {client.description || '—'}
                       </td>
                       <td className="py-4 px-6 text-right">
@@ -254,7 +258,7 @@ export default function ClientsPage() {
                             size="sm"
                             icon={Edit2}
                             onClick={() => openEditModal(client)}
-                            className="text-slate-600 hover:text-slate-900"
+                            className="text-slate-700 hover:text-slate-900 font-bold"
                           >
                             Edit
                           </Button>
@@ -285,7 +289,7 @@ export default function ClientsPage() {
                         {client.name}
                       </h4>
                       {client.clientCode && (
-                        <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-semibold">
+                        <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-800 font-extrabold">
                           {client.clientCode}
                         </span>
                       )}
@@ -307,7 +311,7 @@ export default function ClientsPage() {
                       size="sm"
                       icon={Edit2}
                       onClick={() => openEditModal(client)}
-                      className="flex-1"
+                      className="flex-1 font-bold"
                     >
                       Edit
                     </Button>
@@ -346,13 +350,13 @@ export default function ClientsPage() {
           />
 
           <Input
-            label="Client Code (Optional)"
+            label="Unique Client Code (Must be unique across all clients)"
             name="clientCode"
-            placeholder="e.g. ACM001, XYZ"
+            placeholder="e.g. ACME, CHUTNEY"
             value={formData.clientCode}
-            onChange={(e) => setFormData({ ...formData, clientCode: e.target.value })}
+            onChange={(e) => setFormData({ ...formData, clientCode: e.target.value.toUpperCase() })}
             error={errors.clientCode}
-            helperText="Short alphanumeric code for internal reference"
+            helperText="Short uppercase code. Must be unique. Auto-generated if left blank."
           />
 
           <Select
@@ -387,7 +391,7 @@ export default function ClientsPage() {
               type="submit"
               variant="primary"
               isLoading={isSaving}
-              className="bg-slate-900 hover:bg-slate-800 text-white font-semibold"
+              className="bg-slate-900 hover:bg-slate-800 text-white font-bold"
             >
               {editingClient ? 'Update Client' : 'Save Client'}
             </Button>
