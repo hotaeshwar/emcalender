@@ -1,29 +1,14 @@
 // End-to-end integration test verifying Firebase and Allocation Engine
-import { db, auth } from '../lib/firebase.js';
-import { collection, getDocs, addDoc, doc, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../lib/firebase.js';
+import { collection, addDoc, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { generateWeeklyAllocation } from '../lib/allocationEngine.js';
-import { DEFAULT_CAPACITY_RULES, ROLES, CONTENT_TYPES } from '../lib/constants.js';
-import { getEffectiveWorkingDays, calculateDailyEmployeeCapacity } from '../lib/capacityCalculator.js';
-
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { DEFAULT_CAPACITY_RULES, ROLES } from '../lib/constants.js';
+import { getEffectiveWorkingDays } from '../lib/capacityCalculator.js';
 
 async function verifyEndToEnd() {
   console.log('🚀 Running End-to-End Firebase & Allocation Integration Verification...\n');
 
   try {
-    // 0. Sign in or initialize admin auth session
-    try {
-      await signInWithEmailAndPassword(auth, 'admin@agency.com', 'Admin@123456');
-      console.log('✅ 0. Firebase Auth signed in as Admin successfully');
-    } catch (authErr) {
-      try {
-        await createUserWithEmailAndPassword(auth, 'admin@agency.com', 'Admin@123456');
-        console.log('✅ 0. Created and signed in as Admin successfully');
-      } catch (signupErr) {
-        console.log('ℹ️ Auth note:', signupErr.message);
-      }
-    }
-
     // 1. Check Firebase Firestore connection
     const testCol = collection(db, 'integrationTest');
     const testDoc = await addDoc(testCol, {
