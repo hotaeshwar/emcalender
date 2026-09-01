@@ -350,13 +350,13 @@ export default function ClientsPage() {
           />
 
           <Input
-            label="Unique Client Code (Must be unique across all clients)"
+            label="Client Code (Optional - Must be unique across all clients)"
             name="clientCode"
             placeholder="e.g. ACME, CHUTNEY"
             value={formData.clientCode}
             onChange={(e) => setFormData({ ...formData, clientCode: e.target.value.toUpperCase() })}
             error={errors.clientCode}
-            helperText="Short uppercase code. Must be unique. Auto-generated if left blank."
+            helperText="Short uppercase code. Must be unique. Same code cannot be used."
           />
 
           <Select
