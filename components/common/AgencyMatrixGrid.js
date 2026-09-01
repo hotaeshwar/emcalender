@@ -31,23 +31,64 @@ export default function AgencyMatrixGrid({
     { id: 'c12', name: 'TSS' },
   ];
 
-  // 1. Map allocations by clientId -> employeeId -> { posts, reels, stories }
+  // Robust Indexing Map: (clientId / clientName) x (employeeId / employeeName / employeeCode)
   const matrixMap = {};
+
   allocations.forEach((alloc) => {
-    if (!matrixMap[alloc.clientId]) {
-      matrixMap[alloc.clientId] = {};
-    }
-    matrixMap[alloc.clientId][alloc.employeeId] = {
-      posts: Number(alloc.work?.posts) || 0,
-      reels: Number(alloc.work?.reels) || 0,
-      stories: Number(alloc.work?.stories) || 0,
-    };
+    const cKeys = [
+      alloc.clientId,
+      alloc.clientName,
+      (alloc.clientName || '').toLowerCase(),
+      (alloc.clientId || '').toLowerCase(),
+    ].filter(Boolean);
+
+    const eKeys = [
+      alloc.employeeId,
+      alloc.employeeName,
+      alloc.employeeCode,
+      (alloc.employeeName || '').toLowerCase(),
+      (alloc.employeeCode || '').toLowerCase(),
+    ].filter(Boolean);
+
+    const posts = Number(alloc.work?.posts) || 0;
+    const reels = Number(alloc.work?.reels) || 0;
+    const stories = Number(alloc.work?.stories) || 0;
+
+    cKeys.forEach((cKey) => {
+      if (!matrixMap[cKey]) matrixMap[cKey] = {};
+      eKeys.forEach((eKey) => {
+        if (!matrixMap[cKey][eKey]) {
+          matrixMap[cKey][eKey] = { posts: 0, reels: 0, stories: 0 };
+        }
+        matrixMap[cKey][eKey].posts += posts;
+        matrixMap[cKey][eKey].reels += reels;
+        matrixMap[cKey][eKey].stories += stories;
+      });
+    });
   });
 
-  // 2. Pre-calculate totals for full mathematical accuracy
+  // Function to safely fetch work cell data
+  const getWorkCell = (client, staff) => {
+    const cKeys = [client.id, client.name, (client.name || '').toLowerCase()].filter(Boolean);
+    const sKeys = [staff.id, staff.name, staff.employeeCode, (staff.name || '').toLowerCase()].filter(Boolean);
+
+    for (const ck of cKeys) {
+      if (matrixMap[ck]) {
+        for (const sk of sKeys) {
+          if (matrixMap[ck][sk]) {
+            return matrixMap[ck][sk];
+          }
+        }
+      }
+    }
+
+    return { posts: 0, reels: 0, stories: 0 };
+  };
+
+  // Pre-calculate totals for full mathematical precision
   const staffTotals = {};
   staffList.forEach((s) => {
-    staffTotals[s.id] = { posts: 0, reels: 0, stories: 0 };
+    staffTotals[s.id || s.name] = { posts: 0, reels: 0, stories: 0 };
   });
 
   const clientTotals = {};
@@ -62,18 +103,19 @@ export default function AgencyMatrixGrid({
     let cs = 0;
 
     staffList.forEach((s) => {
-      const work = (matrixMap[client.id] && matrixMap[client.id][s.id]) || { posts: 0, reels: 0, stories: 0 };
+      const work = getWorkCell(client, s);
       cp += work.posts;
       cr += work.reels;
       cs += work.stories;
 
-      staffTotals[s.id].posts += work.posts;
-      staffTotals[s.id].reels += work.reels;
-      staffTotals[s.id].stories += work.stories;
+      const sKey = s.id || s.name;
+      staffTotals[sKey].posts += work.posts;
+      staffTotals[sKey].reels += work.reels;
+      staffTotals[sKey].stories += work.stories;
     });
 
     const totalCount = cp + cr + cs;
-    clientTotals[client.id] = { posts: cp, reels: cr, stories: cs, totalCount };
+    clientTotals[client.id || client.name] = { posts: cp, reels: cr, stories: cs, totalCount };
 
     grandPosts += cp;
     grandReels += cr;
@@ -150,7 +192,7 @@ export default function AgencyMatrixGrid({
           <tbody className="divide-y divide-slate-300 font-medium text-slate-900">
             {clientList.map((client, cIdx) => {
               const sNo = cIdx + 1;
-              const totals = clientTotals[client.id] || { posts: 0, reels: 0, stories: 0, totalCount: 0 };
+              const totals = clientTotals[client.id || client.name] || { posts: 0, reels: 0, stories: 0, totalCount: 0 };
 
               return (
                 <tr key={client.id || cIdx} className="hover:bg-amber-50/40 transition-colors">
@@ -164,11 +206,11 @@ export default function AgencyMatrixGrid({
 
                   {/* Staff Cells */}
                   {staffList.map((staff, sIdx) => {
-                    const work = (matrixMap[client.id] && matrixMap[client.id][staff.id]) || { posts: 0, reels: 0, stories: 0 };
+                    const work = getWorkCell(client, staff);
                     const cellBg = sIdx % 2 === 0 ? 'bg-[#FDF0ED]' : 'bg-[#FCE8E2]';
 
                     return (
-                      <React.Fragment key={`cell-${client.id}-${staff.id}`}>
+                      <React.Fragment key={`cell-${client.id || cIdx}-${staff.id || sIdx}`}>
                         <td className={`py-2.5 px-2 border-r border-slate-900 ${cellBg} font-bold text-blue-900`}>
                           {work.posts > 0 ? work.posts : ''}
                         </td>
@@ -209,11 +251,12 @@ export default function AgencyMatrixGrid({
 
               {/* Staff Footer Totals */}
               {staffList.map((staff, sIdx) => {
-                const tot = staffTotals[staff.id];
+                const sKey = staff.id || staff.name;
+                const tot = staffTotals[sKey] || { posts: 0, reels: 0, stories: 0 };
                 const cellBg = sIdx % 2 === 0 ? 'bg-[#FDF0ED]' : 'bg-[#FCE8E2]';
 
                 return (
-                  <React.Fragment key={`tot-${staff.id}`}>
+                  <React.Fragment key={`tot-${staff.id || sIdx}`}>
                     <td className={`py-3 px-2 border-r border-slate-900 ${cellBg} font-black text-blue-950`}>
                       {tot.posts > 0 ? tot.posts : ''}
                     </td>

@@ -44,6 +44,8 @@ export async function commitWeeklyAllocation({
   clientId = null,
   adminId = 'admin'
 }) {
+  const clientsList = await fetchCollection('clients');
+
   // 1. If recalculating, clean up existing records for this week
   if (recalculate) {
     const existingAlloc = await fetchCollection(ALLOCATIONS_COLLECTION);
@@ -62,10 +64,14 @@ export async function commitWeeklyAllocation({
     }
   }
 
-  // 2. Commit allocations
+  // 2. Commit allocations with full clientName & employeeName
   for (const alloc of allocations) {
+    const matchedClient = (clientsList || []).find((c) => c.id === alloc.clientId);
+    const clientName = alloc.clientName || matchedClient?.name || '';
+
     await saveDocument(ALLOCATIONS_COLLECTION, {
       clientId: alloc.clientId,
+      clientName: clientName,
       employeeId: alloc.employeeId,
       employeeName: alloc.employeeName || '',
       employeeCode: alloc.employeeCode || '',
@@ -86,8 +92,10 @@ export async function commitWeeklyAllocation({
 
   // 3. Commit surplus records
   for (const s of surplus) {
+    const matchedClient = (clientsList || []).find((c) => c.id === s.clientId);
     await saveDocument(SURPLUS_COLLECTION, {
       clientId: s.clientId,
+      clientName: s.clientName || matchedClient?.name || '',
       weekId: s.weekId || weekId,
       contentType: s.contentType,
       roleRequired: s.roleRequired,
@@ -128,6 +136,9 @@ export async function assignSurplusWorkManually({
   const surplusData = surplusList.find((s) => s.id === surplusId);
   if (!surplusData) throw new Error('Surplus record not found');
 
+  const clientsList = await fetchCollection('clients');
+  const matchedClient = clientsList.find((c) => c.id === surplusData.clientId);
+
   const assignQty = Number(quantity) || surplusData.quantity;
 
   const capacityUsed = convertTaskToCapacityUnits(
@@ -145,6 +156,7 @@ export async function assignSurplusWorkManually({
   // Create manual allocation
   await saveDocument(ALLOCATIONS_COLLECTION, {
     clientId: surplusData.clientId,
+    clientName: surplusData.clientName || matchedClient?.name || '',
     employeeId: employee.id,
     employeeName: employee.name,
     employeeCode: employee.employeeCode,
