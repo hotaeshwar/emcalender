@@ -31,7 +31,7 @@ export default function AgencyMatrixGrid({
     { id: 'c12', name: 'TSS' },
   ];
 
-  // Map allocations by clientId -> employeeId -> { posts, reels, stories }
+  // 1. Map allocations by clientId -> employeeId -> { posts, reels, stories }
   const matrixMap = {};
   allocations.forEach((alloc) => {
     if (!matrixMap[alloc.clientId]) {
@@ -44,16 +44,42 @@ export default function AgencyMatrixGrid({
     };
   });
 
-  // Calculate staff column totals
+  // 2. Pre-calculate totals for full mathematical accuracy
   const staffTotals = {};
   staffList.forEach((s) => {
     staffTotals[s.id] = { posts: 0, reels: 0, stories: 0 };
   });
 
+  const clientTotals = {};
   let grandPosts = 0;
   let grandReels = 0;
   let grandStories = 0;
   let grandWeekCount = 0;
+
+  clientList.forEach((client) => {
+    let cp = 0;
+    let cr = 0;
+    let cs = 0;
+
+    staffList.forEach((s) => {
+      const work = (matrixMap[client.id] && matrixMap[client.id][s.id]) || { posts: 0, reels: 0, stories: 0 };
+      cp += work.posts;
+      cr += work.reels;
+      cs += work.stories;
+
+      staffTotals[s.id].posts += work.posts;
+      staffTotals[s.id].reels += work.reels;
+      staffTotals[s.id].stories += work.stories;
+    });
+
+    const totalCount = cp + cr + cs;
+    clientTotals[client.id] = { posts: cp, reels: cr, stories: cs, totalCount };
+
+    grandPosts += cp;
+    grandReels += cr;
+    grandStories += cs;
+    grandWeekCount += totalCount;
+  });
 
   return (
     <div className="bg-white border-2 border-slate-900 rounded-2xl overflow-hidden shadow-md my-4">
@@ -124,9 +150,7 @@ export default function AgencyMatrixGrid({
           <tbody className="divide-y divide-slate-300 font-medium text-slate-900">
             {clientList.map((client, cIdx) => {
               const sNo = cIdx + 1;
-              let clientPosts = 0;
-              let clientReels = 0;
-              let clientStories = 0;
+              const totals = clientTotals[client.id] || { posts: 0, reels: 0, stories: 0, totalCount: 0 };
 
               return (
                 <tr key={client.id || cIdx} className="hover:bg-amber-50/40 transition-colors">
@@ -142,14 +166,6 @@ export default function AgencyMatrixGrid({
                   {staffList.map((staff, sIdx) => {
                     const work = (matrixMap[client.id] && matrixMap[client.id][staff.id]) || { posts: 0, reels: 0, stories: 0 };
                     const cellBg = sIdx % 2 === 0 ? 'bg-[#FDF0ED]' : 'bg-[#FCE8E2]';
-
-                    clientPosts += work.posts;
-                    clientReels += work.reels;
-                    clientStories += work.stories;
-
-                    staffTotals[staff.id].posts += work.posts;
-                    staffTotals[staff.id].reels += work.reels;
-                    staffTotals[staff.id].stories += work.stories;
 
                     return (
                       <React.Fragment key={`cell-${client.id}-${staff.id}`}>
@@ -167,30 +183,18 @@ export default function AgencyMatrixGrid({
                   })}
 
                   {/* Client Totals */}
-                  {(() => {
-                    const clientWeekCount = clientPosts + clientReels + clientStories;
-                    grandPosts += clientPosts;
-                    grandReels += clientReels;
-                    grandStories += clientStories;
-                    grandWeekCount += clientWeekCount;
-
-                    return (
-                      <React.Fragment>
-                        <td className="py-2.5 px-2 border-r border-slate-900 font-extrabold bg-white text-slate-900">
-                          {clientPosts > 0 ? clientPosts : ''}
-                        </td>
-                        <td className="py-2.5 px-2 border-r border-slate-900 font-extrabold bg-white text-slate-900">
-                          {clientReels > 0 ? clientReels : ''}
-                        </td>
-                        <td className="py-2.5 px-2 border-r border-slate-900 font-extrabold bg-white text-slate-900">
-                          {clientStories > 0 ? clientStories : ''}
-                        </td>
-                        <td className="py-2.5 px-2 font-black bg-white text-slate-900 text-sm">
-                          {clientWeekCount > 0 ? clientWeekCount : ''}
-                        </td>
-                      </React.Fragment>
-                    );
-                  })()}
+                  <td className="py-2.5 px-2 border-r border-slate-900 font-extrabold bg-white text-slate-900">
+                    {totals.posts > 0 ? totals.posts : ''}
+                  </td>
+                  <td className="py-2.5 px-2 border-r border-slate-900 font-extrabold bg-white text-slate-900">
+                    {totals.reels > 0 ? totals.reels : ''}
+                  </td>
+                  <td className="py-2.5 px-2 border-r border-slate-900 font-extrabold bg-white text-slate-900">
+                    {totals.stories > 0 ? totals.stories : ''}
+                  </td>
+                  <td className="py-2.5 px-2 font-black bg-white text-slate-900 text-sm">
+                    {totals.totalCount > 0 ? totals.totalCount : ''}
+                  </td>
                 </tr>
               );
             })}
