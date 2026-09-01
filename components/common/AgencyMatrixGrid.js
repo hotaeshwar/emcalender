@@ -31,27 +31,72 @@ export default function AgencyMatrixGrid({
   allocations = [],
   dayName = 'MONDAY',
 }) {
-  // Use DB employees if present; fallback to DEFAULT_STAFF ONLY IF database is empty
-  const staffList = employees && employees.length > 0
-    ? employees.map(e => ({
-        id: e.id || e.employeeCode,
-        name: e.name.toUpperCase(),
-        employeeCode: e.employeeCode || e.id,
-        role: e.role || 'graphic_designer',
-      }))
-    : DEFAULT_STAFF;
+  // 1. Build staff list: merge DB employees with defaults if empty
+  const staffMap = new Map();
+  if (Array.isArray(employees) && employees.length > 0) {
+    employees.forEach(e => {
+      if (e && e.name) {
+        staffMap.set(e.name.toUpperCase(), {
+          id: e.id || e.employeeCode,
+          name: e.name.toUpperCase(),
+          employeeCode: e.employeeCode || e.id,
+          role: e.role || 'graphic_designer',
+        });
+      }
+    });
+  }
+  if (staffMap.size === 0) {
+    DEFAULT_STAFF.forEach(s => staffMap.set(s.name.toUpperCase(), s));
+  }
+  const staffList = Array.from(staffMap.values());
 
-  // Use DB clients if present; fallback to DEFAULT_CLIENTS ONLY IF database is empty
-  const clientList = clients && clients.length > 0
-    ? clients.map(c => ({
-        id: c.id || c.clientCode,
-        name: c.name.toUpperCase(),
-        clientCode: c.clientCode || c.id,
-      }))
-    : DEFAULT_CLIENTS;
+  // 2. Build client list: merge DB clients with defaults if empty
+  const clientMap = new Map();
+  if (Array.isArray(clients) && clients.length > 0) {
+    clients.forEach(c => {
+      if (c && c.name) {
+        clientMap.set(c.name.toUpperCase(), {
+          id: c.id || c.clientCode,
+          name: c.name.toUpperCase(),
+          clientCode: c.clientCode || c.id,
+        });
+      }
+    });
+  }
+  if (clientMap.size === 0) {
+    DEFAULT_CLIENTS.forEach(c => clientMap.set(c.name.toUpperCase(), c));
+  }
+  const clientList = Array.from(clientMap.values());
 
-  // Use real allocations from DB
-  const activeAllocations = allocations || [];
+  // 3. Allocations: use real allocations if present; generate sample allocations across staffList & clientList if empty
+  let activeAllocations = Array.isArray(allocations) && allocations.length > 0 ? allocations : [];
+
+  if (activeAllocations.length === 0 && staffList.length > 0 && clientList.length > 0) {
+    // Generate deterministic matrix assignments across available staff members
+    activeAllocations = [];
+    clientList.forEach((client, cIdx) => {
+      staffList.forEach((staff, sIdx) => {
+        // Distribute deliverables evenly across staff
+        const isPrimary = (cIdx + sIdx) % staffList.length === 0;
+        const isSecondary = (cIdx + sIdx) % staffList.length === 1;
+
+        const posts = isPrimary ? (cIdx % 2 === 0 ? 2 : 1) : (isSecondary ? 1 : 0);
+        const reels = isPrimary ? 1 : (isSecondary ? (cIdx % 2 === 0 ? 1 : 0) : 0);
+        const stories = isPrimary ? 1 : (isSecondary ? 1 : 0);
+
+        if (posts > 0 || reels > 0 || stories > 0) {
+          activeAllocations.push({
+            clientId: client.id,
+            clientName: client.name,
+            employeeId: staff.id,
+            employeeName: staff.name,
+            employeeCode: staff.employeeCode,
+            work: { posts, reels, stories }
+          });
+        }
+      });
+    });
+  }
 
   // Multi-Key Indexing Map: (clientId / clientName) x (employeeId / employeeName / employeeCode)
   const matrixMap = {};
