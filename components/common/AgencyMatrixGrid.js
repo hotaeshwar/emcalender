@@ -2,28 +2,6 @@
 
 import React from 'react';
 
-const DEFAULT_STAFF = [
-  { id: 'emp1', name: 'HARSHITA', employeeCode: 'EMP001', role: 'graphic_designer' },
-  { id: 'emp2', name: 'NEHA', employeeCode: 'EMP002', role: 'graphic_designer' },
-  { id: 'emp3', name: 'GURJEET', employeeCode: 'EMP003', role: 'video_editor' },
-  { id: 'emp4', name: 'KARAN', employeeCode: 'EMP004', role: 'video_editor' },
-];
-
-const DEFAULT_CLIENTS = [
-  { id: 'c1', name: 'ACTION CAR DETAILING', clientCode: 'ACD' },
-  { id: 'c2', name: 'CHUTNEY HOUSE', clientCode: 'CH' },
-  { id: 'c3', name: 'DND', clientCode: 'DND' },
-  { id: 'c4', name: 'DIVINE DWELLING', clientCode: 'DD' },
-  { id: 'c5', name: 'DEVINE STUDIO', clientCode: 'DS' },
-  { id: 'c6', name: 'ISHA INTERNATIONAL', clientCode: 'II' },
-  { id: 'c7', name: 'BALAJI EV', clientCode: 'BEV' },
-  { id: 'c8', name: 'KC CROSSROAD', clientCode: 'KCC' },
-  { id: 'c9', name: 'THE RADIANT MANALI', clientCode: 'TRM' },
-  { id: 'c10', name: 'OREN KASAULI', clientCode: 'OK' },
-  { id: 'c11', name: 'CELESTIAL TRADER', clientCode: 'CT' },
-  { id: 'c12', name: 'TSS', clientCode: 'TSS' },
-];
-
 export default function AgencyMatrixGrid({
   week,
   clients = [],
@@ -31,74 +9,45 @@ export default function AgencyMatrixGrid({
   allocations = [],
   dayName = 'MONDAY',
 }) {
-  // 1. Build staff list: merge DB employees with defaults if empty
-  const staffMap = new Map();
-  if (Array.isArray(employees) && employees.length > 0) {
-    employees.forEach(e => {
-      if (e && e.name) {
-        staffMap.set(e.name.toUpperCase(), {
-          id: e.id || e.employeeCode,
-          name: e.name.toUpperCase(),
-          employeeCode: e.employeeCode || e.id,
-          role: e.role || 'graphic_designer',
-        });
-      }
-    });
+  // Build staff list strictly from active employees passed in from Firebase
+  const staffList = (employees || [])
+    .filter((e) => e && e.name && e.status !== 'inactive')
+    .map((e) => ({
+      id: e.id || e.employeeCode,
+      name: e.name.toUpperCase(),
+      employeeCode: e.employeeCode || e.id,
+      role: e.role || 'graphic_designer',
+    }));
+
+  // Build client list strictly from clients passed in from Firebase
+  const clientList = (clients || [])
+    .filter((c) => c && c.name && c.status !== 'inactive')
+    .map((c) => ({
+      id: c.id || c.clientCode,
+      name: c.name.toUpperCase(),
+      clientCode: c.clientCode || c.id,
+    }));
+
+  if (staffList.length === 0) {
+    return (
+      <div className="p-8 text-center bg-amber-50 border-2 border-dashed border-amber-300 rounded-2xl my-4">
+        <h3 className="text-sm font-black text-amber-900 uppercase tracking-wider">No Active Employees Found in Database</h3>
+        <p className="text-xs text-amber-800 mt-1 font-medium">Please add employees under Employees management page to generate the matrix grid.</p>
+      </div>
+    );
   }
-  if (staffMap.size === 0) {
-    DEFAULT_STAFF.forEach(s => staffMap.set(s.name.toUpperCase(), s));
-  }
-  const staffList = Array.from(staffMap.values());
 
-  // 2. Build client list: merge DB clients with defaults if empty
-  const clientMap = new Map();
-  if (Array.isArray(clients) && clients.length > 0) {
-    clients.forEach(c => {
-      if (c && c.name) {
-        clientMap.set(c.name.toUpperCase(), {
-          id: c.id || c.clientCode,
-          name: c.name.toUpperCase(),
-          clientCode: c.clientCode || c.id,
-        });
-      }
-    });
-  }
-  if (clientMap.size === 0) {
-    DEFAULT_CLIENTS.forEach(c => clientMap.set(c.name.toUpperCase(), c));
-  }
-  const clientList = Array.from(clientMap.values());
-
-  // 3. Allocations: use real allocations if present; generate sample allocations across staffList & clientList if empty
-  let activeAllocations = Array.isArray(allocations) && allocations.length > 0 ? allocations : [];
-
-  if (activeAllocations.length === 0 && staffList.length > 0 && clientList.length > 0) {
-    // Generate deterministic matrix assignments across available staff members
-    activeAllocations = [];
-    clientList.forEach((client, cIdx) => {
-      staffList.forEach((staff, sIdx) => {
-        // Distribute deliverables evenly across staff
-        const isPrimary = (cIdx + sIdx) % staffList.length === 0;
-        const isSecondary = (cIdx + sIdx) % staffList.length === 1;
-
-        const posts = isPrimary ? (cIdx % 2 === 0 ? 2 : 1) : (isSecondary ? 1 : 0);
-        const reels = isPrimary ? 1 : (isSecondary ? (cIdx % 2 === 0 ? 1 : 0) : 0);
-        const stories = isPrimary ? 1 : (isSecondary ? 1 : 0);
-
-        if (posts > 0 || reels > 0 || stories > 0) {
-          activeAllocations.push({
-            clientId: client.id,
-            clientName: client.name,
-            employeeId: staff.id,
-            employeeName: staff.name,
-            employeeCode: staff.employeeCode,
-            work: { posts, reels, stories }
-          });
-        }
-      });
-    });
+  if (clientList.length === 0) {
+    return (
+      <div className="p-8 text-center bg-amber-50 border-2 border-dashed border-amber-300 rounded-2xl my-4">
+        <h3 className="text-sm font-black text-amber-900 uppercase tracking-wider">No Active Clients Found in Database</h3>
+        <p className="text-xs text-amber-800 mt-1 font-medium">Please add clients under Clients management page to generate the matrix grid.</p>
+      </div>
+    );
   }
 
   // Multi-Key Indexing Map: (clientId / clientName) x (employeeId / employeeName / employeeCode)
+  const activeAllocations = Array.isArray(allocations) ? allocations : [];
   const matrixMap = {};
 
   activeAllocations.forEach((alloc) => {
