@@ -7,6 +7,7 @@ import Button from '@/components/common/Button';
 import Badge from '@/components/common/Badge';
 import Select from '@/components/common/Select';
 import AgencyMatrixGrid from '@/components/common/AgencyMatrixGrid';
+import DailyScheduleTimetable from '@/components/common/DailyScheduleTimetable';
 import { SkeletonTable } from '@/components/common/LoadingSkeleton';
 import EmptyState from '@/components/common/EmptyState';
 import ConfirmModal from '@/components/common/ConfirmModal';
@@ -20,6 +21,8 @@ import { subscribeWorkWeeks } from '@/services/weekService';
 import { subscribeClients } from '@/services/clientService';
 import { subscribeEmployees } from '@/services/employeeService';
 import { subscribeSurplusWork } from '@/services/allocationService';
+import { subscribeEmployeeAvailability } from '@/services/availabilityService';
+import { generateDailySchedule } from '@/lib/allocationEngine';
 import { exportAllocationReport } from '@/lib/exportExcel';
 import Link from 'next/link';
 import {
@@ -34,6 +37,7 @@ import {
   ShieldAlert,
   FileSpreadsheet,
   Table,
+  Clock,
   List
 } from 'lucide-react';
 import { ROLES } from '@/lib/constants';
@@ -44,8 +48,9 @@ export default function AllocationsListPage() {
   const [clients, setClients] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [surplusList, setSurplusList] = useState([]);
+  const [availabilityList, setAvailabilityList] = useState([]);
   const [selectedWeekId, setSelectedWeekId] = useState('');
-  const [viewMode, setViewMode] = useState('matrix'); // 'matrix' | 'list'
+  const [viewMode, setViewMode] = useState('matrix'); // 'matrix' | 'schedule' | 'list'
   const [loading, setLoading] = useState(true);
 
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -64,6 +69,7 @@ export default function AllocationsListPage() {
     const unsubClients = subscribeClients(setClients);
     const unsubEmployees = subscribeEmployees(setEmployees);
     const unsubSurplus = subscribeSurplusWork(setSurplusList);
+    const unsubAvail = subscribeEmployeeAvailability(setAvailabilityList);
 
     const unsubAllocations = subscribeAllocations((data) => {
       setAllocations(data || []);
@@ -76,6 +82,7 @@ export default function AllocationsListPage() {
       if (unsubEmployees) unsubEmployees();
       if (unsubAllocations) unsubAllocations();
       if (unsubSurplus) unsubSurplus();
+      if (unsubAvail) unsubAvail();
     };
   }, [selectedWeekId]);
 
@@ -147,7 +154,19 @@ export default function AllocationsListPage() {
                 }`}
               >
                 <Table className="w-3.5 h-3.5" />
-                <span>Matrix Grid View</span>
+                <span>1. Matrix Grid View</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('schedule')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition-all ${
+                  viewMode === 'schedule'
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span>2. Day-Wise Schedule (Mon–Sat)</span>
               </button>
               <button
                 type="button"
@@ -159,7 +178,7 @@ export default function AllocationsListPage() {
                 }`}
               >
                 <List className="w-3.5 h-3.5" />
-                <span>Record List View</span>
+                <span>3. Record List View</span>
               </button>
             </div>
           </div>
@@ -224,6 +243,31 @@ export default function AllocationsListPage() {
               employees={employees}
               allocations={filteredAllocations}
               dayName="MONDAY"
+            />
+          </div>
+        ) : viewMode === 'schedule' ? (
+          /* Day-Wise Production Schedule (Monday through Saturday) */
+          <div className="space-y-3">
+            <div className="flex items-center justify-between px-1">
+              <span className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">
+                Day-by-Day Production Schedule ({currentWeek?.name || 'Active Week'})
+              </span>
+              <span className="text-xs text-slate-600 font-bold">
+                Monday through Saturday Staff Deliverable Allocation
+              </span>
+            </div>
+
+            <DailyScheduleTimetable
+              dailySchedules={generateDailySchedule(
+                filteredAllocations,
+                employees,
+                currentWeek,
+                currentWeek?.holidays || [],
+                availabilityList
+              )}
+              workWeek={currentWeek}
+              employees={employees}
+              clients={clients}
             />
           </div>
         ) : (
