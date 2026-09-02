@@ -236,9 +236,6 @@ export default function EmployeesPage() {
                               <p className="font-bold text-slate-900">
                                 {emp.name}
                               </p>
-                              <p className="text-[11px] text-slate-400 font-mono">
-                                ID: {emp.id.substring(0, 8)}...
-                              </p>
                             </div>
                           </div>
                         </td>

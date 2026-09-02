@@ -228,9 +228,6 @@ export default function ClientsPage() {
                             <p className="font-extrabold text-slate-900">
                               {client.name}
                             </p>
-                            <p className="text-[11px] text-slate-500 font-mono font-semibold">
-                              ID: {client.id.substring(0, 8)}...
-                            </p>
                           </div>
                         </div>
                       </td>
