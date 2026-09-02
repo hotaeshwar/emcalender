@@ -52,6 +52,9 @@ export async function createWorkRequirement(data, adminId = 'admin') {
 
 export async function updateWorkRequirement(id, data, adminId = 'admin') {
   const payload = {
+    clientId: data.clientId,
+    weekId: data.weekId,
+    clientName: data.clientName || '',
     requirements: {
       posts: Number(data.requirements?.posts) || 0,
       reels: Number(data.requirements?.reels) || 0,
@@ -66,7 +69,7 @@ export async function updateWorkRequirement(id, data, adminId = 'admin') {
     action: 'REQUIREMENT_UPDATED',
     entityType: 'requirement',
     entityId: id,
-    description: `Updated requirements ${id}`,
+    description: `Updated requirements for client ${payload.clientName || payload.clientId || id} in week ${payload.weekId} (${payload.requirements.posts}P, ${payload.requirements.reels}R, ${payload.requirements.stories}S)`,
     adminId,
   });
 

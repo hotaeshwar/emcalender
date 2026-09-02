@@ -149,14 +149,11 @@ export default function AgencyMatrixGrid({
           <thead>
             {/* Header Row 1 */}
             <tr className="border-b-2 border-slate-900">
-              <th className="py-2.5 px-3 border-r border-slate-900 font-extrabold bg-white text-slate-900 w-12">
+              <th rowSpan={2} className="py-2.5 px-3 border-r border-slate-900 font-extrabold bg-white text-slate-900 w-12 whitespace-nowrap">
                 S.NO
               </th>
-              <th className="py-2.5 px-4 border-r border-slate-900 font-black bg-yellow-300 text-slate-900 uppercase text-sm tracking-wider w-56">
+              <th className="py-2.5 px-4 border-r border-slate-900 font-black bg-yellow-300 text-slate-900 uppercase text-sm tracking-wider w-56 whitespace-nowrap">
                 {dayName.toUpperCase()}
-              </th>
-              <th className="py-2.5 px-3 border-r border-slate-900 font-extrabold bg-slate-100 text-slate-900 w-14">
-                STAFF
               </th>
 
               {/* Staff Member Header Columns */}
@@ -166,7 +163,7 @@ export default function AgencyMatrixGrid({
                   <th
                     key={staff.id || sIdx}
                     colSpan={3}
-                    className={`py-2.5 px-3 border-r border-slate-900 font-black text-sm uppercase tracking-wider ${bgStyle}`}
+                    className={`py-2.5 px-3 border-r border-slate-900 font-black text-sm uppercase tracking-wider whitespace-nowrap text-center ${bgStyle}`}
                   >
                     {staff.name?.toUpperCase()}
                   </th>
@@ -175,36 +172,33 @@ export default function AgencyMatrixGrid({
 
               <th
                 colSpan={3}
-                className="py-2.5 px-3 border-r border-slate-900 font-black bg-white text-slate-900 uppercase text-xs tracking-wider"
+                className="py-2.5 px-3 border-r border-slate-900 font-black bg-white text-slate-900 uppercase text-xs tracking-wider whitespace-nowrap"
               >
                 TOTAL COUNT
               </th>
-              <th className="py-2.5 px-3 font-black bg-white text-slate-900 uppercase text-xs tracking-wider w-28">
+              <th rowSpan={2} className="py-2.5 px-3 font-black bg-white text-slate-900 uppercase text-xs tracking-wider w-28 whitespace-nowrap">
                 WEEK COUNT
               </th>
             </tr>
 
             {/* Header Row 2 */}
             <tr className="border-b-2 border-slate-900 bg-slate-100 text-[11px] font-black uppercase text-slate-900">
-              <th className="py-2 px-2 border-r border-slate-900"></th>
-              <th className="py-2 px-3 border-r border-slate-900 bg-slate-300 font-black text-slate-900 text-left">
+              <th className="py-2 px-3 border-r border-slate-900 bg-slate-300 font-black text-slate-900 text-left whitespace-nowrap">
                 CLIENTS
               </th>
-              <th className="py-2 px-2 border-r border-slate-900"></th>
 
               {/* Content Subheaders for each Staff Member */}
               {staffList.map((staff, sIdx) => (
                 <React.Fragment key={`sub-${staff.id || sIdx}`}>
-                  <th className="py-2 px-2 border-r border-slate-900 bg-[#FCE4D6]">POST</th>
-                  <th className="py-2 px-2 border-r border-slate-900 bg-[#FCE4D6]">REEL</th>
-                  <th className="py-2 px-2 border-r border-slate-900 bg-[#FCE4D6]">STORY</th>
+                  <th className="py-2 px-2 border-r border-slate-900 bg-[#FCE4D6] whitespace-nowrap">POST</th>
+                  <th className="py-2 px-2 border-r border-slate-900 bg-[#FCE4D6] whitespace-nowrap">REEL</th>
+                  <th className="py-2 px-2 border-r border-slate-900 bg-[#FCE4D6] whitespace-nowrap">STORY</th>
                 </React.Fragment>
               ))}
 
-              <th className="py-2 px-2 border-r border-slate-900 bg-slate-50 font-black">P</th>
-              <th className="py-2 px-2 border-r border-slate-900 bg-slate-50 font-black">R</th>
-              <th className="py-2 px-2 border-r border-slate-900 bg-slate-50 font-black">S</th>
-              <th className="py-2 px-2 bg-slate-50 font-black">WEEK COUNT</th>
+              <th className="py-2 px-2 border-r border-slate-900 bg-slate-50 font-black whitespace-nowrap">P</th>
+              <th className="py-2 px-2 border-r border-slate-900 bg-slate-50 font-black whitespace-nowrap">R</th>
+              <th className="py-2 px-2 border-r border-slate-900 bg-slate-50 font-black whitespace-nowrap">S</th>
             </tr>
           </thead>
 
@@ -221,7 +215,6 @@ export default function AgencyMatrixGrid({
                   <td className="py-2.5 px-3 border-r border-slate-900 font-extrabold bg-slate-200 text-slate-900 text-left uppercase">
                     {client.name}
                   </td>
-                  <td className="py-2.5 px-2 border-r border-slate-900 bg-slate-50"></td>
 
                   {/* Staff Cells */}
                   {staffList.map((staff, sIdx) => {
@@ -266,7 +259,6 @@ export default function AgencyMatrixGrid({
               <td className="py-3 px-3 border-r border-slate-900 bg-slate-300 text-left font-black uppercase text-sm">
                 TOTAL
               </td>
-              <td className="py-3 px-2 border-r border-slate-900 bg-slate-100"></td>
 
               {/* Staff Footer Totals */}
               {staffList.map((staff, sIdx) => {

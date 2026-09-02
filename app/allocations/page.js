@@ -179,6 +179,30 @@ export default function AllocationsListPage() {
           </div>
         </div>
 
+        {/* Surplus Alert if unassigned items exist */}
+        {currentSurplus.filter((s) => s.status !== 'assigned').length > 0 && (
+          <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-950">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold flex-shrink-0">
+                <AlertTriangle className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="font-extrabold text-sm">
+                  {currentSurplus.filter((s) => s.status !== 'assigned').length} Surplus Items Requiring Manual Distribution
+                </p>
+                <p className="text-rose-800 font-medium">
+                  Deliverables that exceeded team capacity during auto-allocation can be manually distributed to staff.
+                </p>
+              </div>
+            </div>
+            <Link href="/surplus" className="flex-shrink-0">
+              <Button variant="primary" size="sm" icon={ArrowRight} className="bg-rose-700 hover:bg-rose-800 text-white font-bold">
+                Distribute Surplus Work
+              </Button>
+            </Link>
+          </div>
+        )}
+
         {/* Content Section */}
         {loading ? (
           <SkeletonTable rows={5} cols={7} />

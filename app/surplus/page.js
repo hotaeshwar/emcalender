@@ -151,6 +151,19 @@ export default function SurplusPage() {
     }
   };
 
+  const selectedEmp = employees.find((e) => e.id === selectedEmpId);
+  const targetWeek = selectedSurplus ? weeks.find((w) => w.id === selectedSurplus.weekId) : null;
+  const empAllocations = selectedEmp && selectedSurplus
+    ? allocations.filter((a) => a.employeeId === selectedEmp.id && a.weekId === selectedSurplus.weekId)
+    : [];
+  const currentUsedUnits = empAllocations.reduce((sum, a) => sum + (Number(a.capacityUsed) || 0), 0);
+  const additionalUnits = selectedEmp && selectedSurplus
+    ? convertTaskToCapacityUnits(selectedSurplus.contentType, selectedEmp.role, assignQuantity, capacityRules)
+    : 0;
+  const { effectiveWorkingDates } = targetWeek ? getEffectiveWorkingDays(targetWeek, targetWeek?.holidays || []) : { effectiveWorkingDates: [] };
+  const empWeekCap = selectedEmp ? calculateWeeklyEmployeeCapacity(selectedEmp, capacityRules, effectiveWorkingDates, []) : { weeklyCapacityUnits: 0 };
+  const projectedUnits = currentUsedUnits + additionalUnits;
+  const projectedUtilization = calculateUtilization(projectedUnits, empWeekCap.weeklyCapacityUnits);
   const unassignedSurplus = surplusList.filter((s) => s.status !== 'assigned');
 
   return (
@@ -170,7 +183,7 @@ export default function SurplusPage() {
                 {unassignedSurplus.length} Surplus Items Requiring Attention
               </h3>
               <p className="text-xs text-slate-500">
-                These items could not be allocated within normal daily capacity limits and need manual staff assignment.
+                These items could not be allocated within normal daily capacity limits and can be manually distributed to staff.
               </p>
             </div>
           </div>
@@ -212,7 +225,7 @@ export default function SurplusPage() {
                     return (
                       <tr key={item.id} className="hover:bg-slate-50 transition-colors">
                         <td className="py-4 px-6 font-bold text-slate-900">
-                          {client?.name || item.clientId}
+                          {client?.name || item.clientName || item.clientId}
                         </td>
 
                         <td className="py-4 px-6 text-slate-700 font-medium">
@@ -259,8 +272,8 @@ export default function SurplusPage() {
         <Modal
           isOpen={Boolean(selectedSurplus)}
           onClose={() => !isAssigning && setSelectedSurplus(null)}
-          title="Manually Assign Surplus Work"
-          subtitle={`Assigning ${selectedSurplus.quantity} ${selectedSurplus.contentType}s to available staff`}
+          title="Manually Distribute Surplus Work"
+          subtitle={`Assigning ${selectedSurplus.quantity} surplus ${selectedSurplus.contentType}s for client ${selectedSurplus.clientName || selectedSurplus.clientId}`}
         >
           <form onSubmit={handleAssign} className="space-y-4">
             <Select
@@ -268,11 +281,20 @@ export default function SurplusPage() {
               value={selectedEmpId}
               onChange={(e) => setSelectedEmpId(e.target.value)}
               options={employees
-                .filter((e) => e.role === selectedSurplus.roleRequired && e.status === 'active')
-                .map((e) => ({
-                  value: e.id,
-                  label: `${e.name} (${e.employeeCode})`,
-                }))}
+                .filter((e) => e.status !== 'inactive')
+                .sort((a, b) => {
+                  const matchA = a.role === selectedSurplus.roleRequired ? 0 : 1;
+                  const matchB = b.role === selectedSurplus.roleRequired ? 0 : 1;
+                  return matchA - matchB;
+                })
+                .map((e) => {
+                  const isMatching = e.role === selectedSurplus.roleRequired;
+                  const roleLabel = e.role ? e.role.replace(/_/g, ' ') : '';
+                  return {
+                    value: e.id,
+                    label: `${e.name} (${e.employeeCode || 'Staff'}) - ${roleLabel}${isMatching ? ' ★ (Recommended)' : ''}`,
+                  };
+                })}
               required
             />
 
@@ -286,29 +308,51 @@ export default function SurplusPage() {
               required
             />
 
-            {/* Overload Notice & Override */}
-            <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 space-y-3">
-              <label className="flex items-start gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={allowOverload}
-                  onChange={(e) => setAllowOverload(e.target.checked)}
-                  className="mt-0.5 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
-                />
-                <span className="text-xs text-amber-950 font-bold">
-                  Authorize Capacity Overload (Permit &gt;100% capacity)
-                </span>
-              </label>
+            {/* Live Impact Preview */}
+            {selectedEmp && (
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1.5">
+                <div className="flex justify-between font-medium text-slate-700">
+                  <span>Current Utilization:</span>
+                  <span className="font-bold text-slate-900">{calculateUtilization(currentUsedUnits, empWeekCap.weeklyCapacityUnits)}% ({currentUsedUnits} / {empWeekCap.weeklyCapacityUnits} Units)</span>
+                </div>
+                <div className="flex justify-between font-medium text-slate-700">
+                  <span>Additional Effort:</span>
+                  <span className="font-bold text-indigo-700">+{additionalUnits} Units ({assignQuantity} {selectedSurplus.contentType}s)</span>
+                </div>
+                <div className="flex justify-between font-bold pt-1 border-t border-slate-200">
+                  <span className="text-slate-900">Projected Utilization:</span>
+                  <span className={projectedUtilization > 100 ? 'text-rose-600' : 'text-emerald-600'}>
+                    {projectedUtilization}% {projectedUtilization > 100 ? '(Overloaded)' : '(Within Capacity)'}
+                  </span>
+                </div>
+              </div>
+            )}
 
-              {allowOverload && (
-                <Textarea
-                  placeholder="State reason for manual overload justification..."
-                  value={overrideReason}
-                  onChange={(e) => setOverrideReason(e.target.value)}
-                  rows={2}
-                />
-              )}
-            </div>
+            {/* Overload Notice & Override */}
+            {projectedUtilization > 100 && (
+              <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 space-y-3">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={allowOverload}
+                    onChange={(e) => setAllowOverload(e.target.checked)}
+                    className="mt-0.5 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
+                  />
+                  <span className="text-xs text-amber-950 font-bold">
+                    Authorize Capacity Overload (Permit {projectedUtilization}% capacity)
+                  </span>
+                </label>
+
+                {allowOverload && (
+                  <Textarea
+                    placeholder="State reason for manual overload justification..."
+                    value={overrideReason}
+                    onChange={(e) => setOverrideReason(e.target.value)}
+                    rows={2}
+                  />
+                )}
+              </div>
+            )}
 
             <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
               <Button
@@ -324,7 +368,7 @@ export default function SurplusPage() {
                 isLoading={isAssigning}
                 className="bg-slate-900 hover:bg-slate-800 text-white font-semibold"
               >
-                Confirm Assignment
+                Distribute Deliverable
               </Button>
             </div>
           </form>
