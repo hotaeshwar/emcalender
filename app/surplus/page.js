@@ -14,7 +14,9 @@ import EmptyState from '@/components/common/EmptyState';
 import { useToast } from '@/contexts/ToastContext';
 import {
   subscribeSurplusWork,
-  assignSurplusWorkManually
+  assignSurplusWorkManually,
+  createSurplusWorkRecord,
+  createDirectManualAllocation
 } from '@/services/allocationService';
 import { subscribeEmployees } from '@/services/employeeService';
 import { subscribeClients } from '@/services/clientService';
@@ -28,6 +30,7 @@ import {
   calculateUtilization,
   convertTaskToCapacityUnits
 } from '@/lib/capacityCalculator';
+import Link from 'next/link';
 import {
   AlertOctagon,
   Users,
@@ -36,9 +39,15 @@ import {
   AlertTriangle,
   UserCheck,
   Building2,
-  Sparkles
+  Sparkles,
+  Plus,
+  History,
+  Clock,
+  ArrowRight,
+  HelpCircle,
+  FileCheck
 } from 'lucide-react';
-import { ROLES, ROLE_LABELS } from '@/lib/constants';
+import { ROLES, ROLE_LABELS, CONTENT_TYPES } from '@/lib/constants';
 
 export default function SurplusPage() {
   const [surplusList, setSurplusList] = useState([]);
@@ -47,15 +56,43 @@ export default function SurplusPage() {
   const [weeks, setWeeks] = useState([]);
   const [capacityRules, setCapacityRules] = useState([]);
   const [allocations, setAllocations] = useState([]);
+  const [selectedWeekId, setSelectedWeekId] = useState('all');
+  const [surplusTab, setSurplusTab] = useState('unassigned'); // 'unassigned' | 'assigned'
   const [loading, setLoading] = useState(true);
 
-  // Manual Assignment Modal
+  // 1. Manual Surplus Assignment Modal
   const [selectedSurplus, setSelectedSurplus] = useState(null);
   const [selectedEmpId, setSelectedEmpId] = useState('');
   const [assignQuantity, setAssignQuantity] = useState(1);
   const [allowOverload, setAllowOverload] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
   const [isAssigning, setIsAssigning] = useState(false);
+
+  // 2. Add New Surplus Item Modal
+  const [isAddSurplusModalOpen, setIsAddSurplusModalOpen] = useState(false);
+  const [newSurplusData, setNewSurplusData] = useState({
+    clientId: '',
+    weekId: '',
+    contentType: 'reel',
+    roleRequired: 'video_editor',
+    quantity: 1,
+    reason: 'Extra campaign deliverables requested beyond capacity',
+  });
+  const [isCreatingSurplus, setIsCreatingSurplus] = useState(false);
+
+  // 3. Direct Manual Allocation Modal
+  const [isDirectAllocModalOpen, setIsDirectAllocModalOpen] = useState(false);
+  const [directAllocData, setDirectAllocData] = useState({
+    clientId: '',
+    employeeId: '',
+    weekId: '',
+    posts: 0,
+    reels: 0,
+    stories: 0,
+    allowOverload: false,
+    overrideReason: '',
+  });
+  const [isCreatingDirectAlloc, setIsCreatingDirectAlloc] = useState(false);
 
   const { success, error, warning } = useToast();
 
@@ -67,7 +104,12 @@ export default function SurplusPage() {
 
     const unsubEmp = subscribeEmployees(setEmployees);
     const unsubClients = subscribeClients(setClients);
-    const unsubWeeks = subscribeWorkWeeks(setWeeks);
+    const unsubWeeks = subscribeWorkWeeks((wList) => {
+      setWeeks(wList || []);
+      if (wList && wList.length > 0 && selectedWeekId === 'all') {
+        // keep 'all' or default
+      }
+    });
     const unsubRules = subscribeCapacityRules(setCapacityRules);
     const unsubAlloc = subscribeAllocations(setAllocations);
 
@@ -79,8 +121,17 @@ export default function SurplusPage() {
       if (unsubRules) unsubRules();
       if (unsubAlloc) unsubAlloc();
     };
-  }, []);
+  }, [selectedWeekId]);
 
+  // Filter list by selected week
+  const filteredSurplusList = selectedWeekId === 'all'
+    ? surplusList
+    : surplusList.filter((s) => s.weekId === selectedWeekId);
+
+  const unassignedSurplus = filteredSurplusList.filter((s) => s.status !== 'assigned');
+  const assignedSurplus = filteredSurplusList.filter((s) => s.status === 'assigned');
+
+  // --- Handlers ---
   const openAssignModal = (surplusItem) => {
     setSelectedSurplus(surplusItem);
     setAssignQuantity(surplusItem.quantity || 1);
@@ -89,12 +140,12 @@ export default function SurplusPage() {
 
     // Pre-select first eligible employee
     const eligible = employees.filter(
-      (e) => e.role === surplusItem.roleRequired && e.status === 'active'
+      (e) => (e.role === surplusItem.roleRequired || e.role === ROLES.GRAPHIC_DESIGNER) && e.status !== 'inactive'
     );
-    setSelectedEmpId(eligible[0]?.id || '');
+    setSelectedEmpId(eligible[0]?.id || employees[0]?.id || '');
   };
 
-  const handleAssign = async (e) => {
+  const handleAssignSurplus = async (e) => {
     e.preventDefault();
     if (!selectedEmpId) {
       error('Please select an employee to assign this surplus work.');
@@ -125,7 +176,7 @@ export default function SurplusPage() {
 
     if (projectedUtilization > 100 && !allowOverload) {
       warning(
-        `Overload Warning: ${employee.name} will reach ${projectedUtilization}% utilization. Please check "Allow Overload" and provide a reason to confirm.`
+        `Overload Warning: ${employee.name} will reach ${projectedUtilization}% utilization. Please check "Authorize Capacity Overload" to confirm.`
       );
       return;
     }
@@ -141,7 +192,7 @@ export default function SurplusPage() {
         capacityRules,
       });
 
-      success(`Successfully assigned ${assignQuantity} ${selectedSurplus.contentType}s to ${employee.name}.`);
+      success(`Successfully assigned ${assignQuantity} ${selectedSurplus.contentType}s to ${employee.name}!`, 'Work Distributed');
       setSelectedSurplus(null);
     } catch (err) {
       console.error(err);
@@ -151,6 +202,99 @@ export default function SurplusPage() {
     }
   };
 
+  const handleCreateSurplus = async (e) => {
+    e.preventDefault();
+    if (!newSurplusData.clientId || !newSurplusData.weekId) {
+      error('Please select both a Client and Target Work Week.');
+      return;
+    }
+
+    const client = clients.find((c) => c.id === newSurplusData.clientId);
+    setIsCreatingSurplus(true);
+    try {
+      await createSurplusWorkRecord({
+        clientId: newSurplusData.clientId,
+        clientName: client?.name || '',
+        weekId: newSurplusData.weekId,
+        contentType: newSurplusData.contentType,
+        roleRequired: newSurplusData.roleRequired,
+        quantity: Number(newSurplusData.quantity) || 1,
+        reason: 'MANUAL_ENTRY',
+        reasonLabel: newSurplusData.reason,
+      });
+
+      success(`Added ${newSurplusData.quantity} surplus ${newSurplusData.contentType}s for ${client?.name}!`, 'Surplus Logged');
+      setIsAddSurplusModalOpen(false);
+      setNewSurplusData({
+        clientId: '',
+        weekId: weeks[0]?.id || '',
+        contentType: 'reel',
+        roleRequired: 'video_editor',
+        quantity: 1,
+        reason: 'Extra campaign deliverables requested beyond capacity',
+      });
+    } catch (err) {
+      console.error(err);
+      error('Failed to create surplus deliverable.');
+    } finally {
+      setIsCreatingSurplus(false);
+    }
+  };
+
+  const handleCreateDirectAllocation = async (e) => {
+    e.preventDefault();
+    if (!directAllocData.clientId || !directAllocData.employeeId || !directAllocData.weekId) {
+      error('Please select Client, Employee, and Target Work Week.');
+      return;
+    }
+
+    const client = clients.find((c) => c.id === directAllocData.clientId);
+    const employee = employees.find((e) => e.id === directAllocData.employeeId);
+    const totalItems = (Number(directAllocData.posts) || 0) + (Number(directAllocData.reels) || 0) + (Number(directAllocData.stories) || 0);
+
+    if (totalItems <= 0) {
+      error('Please specify at least 1 post, reel, or story.');
+      return;
+    }
+
+    setIsCreatingDirectAlloc(true);
+    try {
+      await createDirectManualAllocation({
+        clientId: directAllocData.clientId,
+        clientName: client?.name || '',
+        employeeId: directAllocData.employeeId,
+        weekId: directAllocData.weekId,
+        work: {
+          posts: Number(directAllocData.posts) || 0,
+          reels: Number(directAllocData.reels) || 0,
+          stories: Number(directAllocData.stories) || 0,
+        },
+        manualOverride: directAllocData.allowOverload,
+        overrideReason: directAllocData.overrideReason,
+        capacityRules,
+      });
+
+      success(`Successfully allocated ${totalItems} deliverables directly to ${employee?.name}!`, 'Manual Allocation Saved');
+      setIsDirectAllocModalOpen(false);
+      setDirectAllocData({
+        clientId: '',
+        employeeId: '',
+        weekId: weeks[0]?.id || '',
+        posts: 0,
+        reels: 0,
+        stories: 0,
+        allowOverload: false,
+        overrideReason: '',
+      });
+    } catch (err) {
+      console.error(err);
+      error('Failed to create manual allocation.');
+    } finally {
+      setIsCreatingDirectAlloc(false);
+    }
+  };
+
+  // Live modal capacity calculations
   const selectedEmp = employees.find((e) => e.id === selectedEmpId);
   const targetWeek = selectedSurplus ? weeks.find((w) => w.id === selectedSurplus.weekId) : null;
   const empAllocations = selectedEmp && selectedSurplus
@@ -164,110 +308,302 @@ export default function SurplusPage() {
   const empWeekCap = selectedEmp ? calculateWeeklyEmployeeCapacity(selectedEmp, capacityRules, effectiveWorkingDates, []) : { weeklyCapacityUnits: 0 };
   const projectedUnits = currentUsedUnits + additionalUnits;
   const projectedUtilization = calculateUtilization(projectedUnits, empWeekCap.weeklyCapacityUnits);
-  const unassignedSurplus = surplusList.filter((s) => s.status !== 'assigned');
 
   return (
     <AppLayout
-      title="Surplus Work Management"
-      subtitle="Deliverables exceeding automated team capacity requiring manual assignment or capacity reallocation"
+      title="Surplus Work & Manual Distribution"
+      subtitle="Manage deliverables exceeding automated capacity and manually distribute workload across staff"
     >
       <div className="space-y-6 bg-white">
-        {/* KPI Alert Banner */}
-        <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center flex-shrink-0 font-bold">
-              <AlertOctagon className="w-5 h-5" />
+        {/* Controls & Action Bar */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-4 rounded-2xl bg-white border border-slate-200 shadow-sm">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">
+              Filter by Week:
+            </span>
+            <div className="w-60">
+              <Select
+                value={selectedWeekId}
+                onChange={(e) => setSelectedWeekId(e.target.value)}
+                options={[
+                  { value: 'all', label: 'All Work Weeks' },
+                  ...weeks.map((w) => ({
+                    value: w.id,
+                    label: `${w.name} (${w.startDate})`,
+                  })),
+                ]}
+              />
+            </div>
+
+            {/* Tab Switches */}
+            <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200">
+              <button
+                type="button"
+                onClick={() => setSurplusTab('unassigned')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition-all ${
+                  surplusTab === 'unassigned'
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+                }`}
+              >
+                <AlertOctagon className="w-3.5 h-3.5" />
+                <span>Unassigned Surplus ({unassignedSurplus.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSurplusTab('assigned')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition-all ${
+                  surplusTab === 'assigned'
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+                }`}
+              >
+                <History className="w-3.5 h-3.5" />
+                <span>Assigned History ({assignedSurplus.length})</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={Plus}
+              onClick={() => {
+                setNewSurplusData({
+                  clientId: clients[0]?.id || '',
+                  weekId: weeks[0]?.id || '',
+                  contentType: 'reel',
+                  roleRequired: 'video_editor',
+                  quantity: 1,
+                  reason: 'Extra deliverables requested beyond weekly capacity',
+                });
+                setIsAddSurplusModalOpen(true);
+              }}
+              className="font-bold"
+            >
+              + Log Surplus Item
+            </Button>
+
+            <Button
+              variant="primary"
+              size="sm"
+              icon={UserCheck}
+              onClick={() => {
+                setDirectAllocData({
+                  clientId: clients[0]?.id || '',
+                  employeeId: employees[0]?.id || '',
+                  weekId: weeks[0]?.id || '',
+                  posts: 0,
+                  reels: 0,
+                  stories: 0,
+                  allowOverload: false,
+                  overrideReason: '',
+                });
+                setIsDirectAllocModalOpen(true);
+              }}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold"
+            >
+              + Direct Manual Allocation
+            </Button>
+
+            <Link href="/allocations/new">
+              <Button variant="primary" size="sm" icon={Sparkles} className="bg-slate-900 hover:bg-slate-800 text-white font-bold shadow-sm">
+                Run Auto Allocation
+              </Button>
+            </Link>
+          </div>
+        </div>
+
+        {/* Explain How Surplus Works Banner */}
+        <div className="p-4 rounded-2xl bg-indigo-50/70 border border-indigo-200 flex items-start justify-between gap-4 text-xs text-indigo-950">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 rounded-xl bg-indigo-100 text-indigo-700 font-extrabold flex items-center justify-center flex-shrink-0">
+              <HelpCircle className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-slate-900">
-                {unassignedSurplus.length} Surplus Items Requiring Attention
-              </h3>
-              <p className="text-xs text-slate-500">
-                These items could not be allocated within normal daily capacity limits and can be manually distributed to staff.
+              <h4 className="font-extrabold text-sm text-indigo-900">
+                How Automatic Allocation & Surplus Rules Work:
+              </h4>
+              <p className="text-indigo-800 mt-1 leading-relaxed">
+                • <strong>Graphic Designer:</strong> Baseline <strong>6 Units/Day</strong> (3P + 1R + 2S) = <strong>30–36 Units/Week</strong>.<br/>
+                • <strong>Video Editor:</strong> Baseline <strong>4 Units/Day</strong> (3R + 1S) = <strong>20–24 Units/Week</strong>.<br/>
+                • When total client requirements fit within these team capacities, <strong>0 surplus is generated</strong> and all items are allocated. When requirements exceed employee quotas or when staff are on leave, excess items automatically move here to be manually distributed.
               </p>
             </div>
           </div>
         </div>
 
-        {/* Surplus Table */}
-        <Card>
-          <CardHeader
-            title="Unassigned Deliverables"
-            subtitle="Surplus items recorded by the automated allocation engine"
-          />
-
-          {loading ? (
-            <SkeletonTable rows={4} cols={6} />
-          ) : unassignedSurplus.length === 0 ? (
-            <EmptyState
-              icon={CheckCircle2}
-              title="No Surplus Work Pending"
-              description="All client requirements have been successfully allocated within standard team capacity."
+        {/* Content Section: Unassigned vs Assigned */}
+        {loading ? (
+          <SkeletonTable rows={4} cols={6} />
+        ) : surplusTab === 'unassigned' ? (
+          <Card>
+            <CardHeader
+              title="Unassigned Surplus Deliverables"
+              subtitle="Deliverables ready for manual staff assignment and overload distribution"
+              action={
+                <Badge variant={unassignedSurplus.length > 0 ? 'danger' : 'success'} size="sm">
+                  {unassignedSurplus.length} Pending
+                </Badge>
+              }
             />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                    <th className="py-3.5 px-6">Client</th>
-                    <th className="py-3.5 px-6">Work Week</th>
-                    <th className="py-3.5 px-6">Deliverable</th>
-                    <th className="py-3.5 px-6">Role Needed</th>
-                    <th className="py-3.5 px-6">Surplus Reason</th>
-                    <th className="py-3.5 px-6 text-right">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-sm">
-                  {unassignedSurplus.map((item) => {
-                    const client = clients.find((c) => c.id === item.clientId);
-                    const week = weeks.find((w) => w.id === item.weekId);
 
-                    return (
-                      <tr key={item.id} className="hover:bg-slate-50 transition-colors">
-                        <td className="py-4 px-6 font-bold text-slate-900">
-                          {client?.name || item.clientName || item.clientId}
-                        </td>
+            {unassignedSurplus.length === 0 ? (
+              <div className="p-12 text-center bg-slate-50 rounded-2xl border border-slate-200">
+                <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto mb-3" />
+                <h3 className="text-base font-extrabold text-slate-900">No Surplus Work Pending</h3>
+                <p className="text-xs text-slate-500 max-w-md mx-auto mt-1.5 leading-relaxed">
+                  All current client requirements fit completely within your team's weekly capacity thresholds (30–36 units for Graphic Designers and 20–24 units for Video Editors).
+                </p>
+                <div className="flex items-center justify-center gap-3 mt-5">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={Plus}
+                    onClick={() => setIsAddSurplusModalOpen(true)}
+                    className="font-bold"
+                  >
+                    Log Extra Surplus Task
+                  </Button>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    icon={UserCheck}
+                    onClick={() => setIsDirectAllocModalOpen(true)}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold"
+                  >
+                    Direct Manual Allocation
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                      <th className="py-3.5 px-6">Client</th>
+                      <th className="py-3.5 px-6">Work Week</th>
+                      <th className="py-3.5 px-6">Deliverable</th>
+                      <th className="py-3.5 px-6">Role Needed</th>
+                      <th className="py-3.5 px-6">Surplus Reason</th>
+                      <th className="py-3.5 px-6 text-right">Manual Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-sm">
+                    {unassignedSurplus.map((item) => {
+                      const client = clients.find((c) => c.id === item.clientId);
+                      const week = weeks.find((w) => w.id === item.weekId);
 
-                        <td className="py-4 px-6 text-slate-700 font-medium">
-                          {week?.name || item.weekId}
-                        </td>
+                      return (
+                        <tr key={item.id} className="hover:bg-slate-50 transition-colors">
+                          <td className="py-4 px-6 font-bold text-slate-900">
+                            {client?.name || item.clientName || item.clientId}
+                          </td>
 
-                        <td className="py-4 px-6">
-                          <span className="font-extrabold text-rose-600">
-                            {item.quantity} {item.contentType?.toUpperCase()}
-                          </span>
-                        </td>
+                          <td className="py-4 px-6 text-slate-700 font-medium">
+                            {week?.name || item.weekId}
+                          </td>
 
-                        <td className="py-4 px-6">
-                          <Badge role={item.roleRequired} size="sm" />
-                        </td>
+                          <td className="py-4 px-6">
+                            <span className="font-extrabold text-rose-600">
+                              {item.quantity} {item.contentType?.toUpperCase()}s
+                            </span>
+                          </td>
 
-                        <td className="py-4 px-6 text-xs text-rose-700 font-semibold">
-                          {item.reasonLabel || item.reason}
-                        </td>
+                          <td className="py-4 px-6">
+                            <Badge role={item.roleRequired} size="sm" />
+                          </td>
 
-                        <td className="py-4 px-6 text-right">
-                          <Button
-                            variant="primary"
-                            size="sm"
-                            icon={UserCheck}
-                            onClick={() => openAssignModal(item)}
-                            className="bg-slate-900 hover:bg-slate-800 text-white font-semibold"
-                          >
-                            Assign Manually
-                          </Button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
+                          <td className="py-4 px-6 text-xs text-rose-800 font-semibold">
+                            {item.reasonLabel || item.reason}
+                          </td>
+
+                          <td className="py-4 px-6 text-right">
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              icon={UserCheck}
+                              onClick={() => openAssignModal(item)}
+                              className="bg-slate-900 hover:bg-slate-800 text-white font-bold"
+                            >
+                              Assign Manually
+                            </Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+        ) : (
+          /* Assigned History Tab */
+          <Card>
+            <CardHeader
+              title="Assigned Surplus History"
+              subtitle="Deliverables that were manually distributed to team members"
+              action={
+                <Badge variant="brand" size="sm">
+                  {assignedSurplus.length} Assigned Records
+                </Badge>
+              }
+            />
+
+            {assignedSurplus.length === 0 ? (
+              <EmptyState
+                icon={History}
+                title="No Assigned History"
+                description="No surplus deliverables have been manually assigned yet."
+              />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                      <th className="py-3.5 px-6">Client</th>
+                      <th className="py-3.5 px-6">Work Week</th>
+                      <th className="py-3.5 px-6">Deliverable</th>
+                      <th className="py-3.5 px-6">Assigned Staff</th>
+                      <th className="py-3.5 px-6">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-sm">
+                    {assignedSurplus.map((item) => {
+                      const client = clients.find((c) => c.id === item.clientId);
+                      const week = weeks.find((w) => w.id === item.weekId);
+                      const assignedEmp = employees.find((e) => e.id === item.assignedToEmployeeId);
+
+                      return (
+                        <tr key={item.id} className="hover:bg-slate-50 transition-colors">
+                          <td className="py-4 px-6 font-bold text-slate-900">
+                            {client?.name || item.clientName || item.clientId}
+                          </td>
+                          <td className="py-4 px-6 text-slate-700 font-medium">
+                            {week?.name || item.weekId}
+                          </td>
+                          <td className="py-4 px-6 font-extrabold text-indigo-700">
+                            {item.quantity} {item.contentType?.toUpperCase()}s
+                          </td>
+                          <td className="py-4 px-6 font-bold text-slate-900">
+                            {assignedEmp?.name || item.assignedToEmployeeName || 'Assigned Staff'}
+                          </td>
+                          <td className="py-4 px-6">
+                            <Badge variant="success" size="sm">Distributed</Badge>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+        )}
       </div>
 
-      {/* Manual Assignment Modal */}
+      {/* 1. Modal: Manually Distribute Selected Surplus Work */}
       {selectedSurplus && (
         <Modal
           isOpen={Boolean(selectedSurplus)}
@@ -275,7 +611,7 @@ export default function SurplusPage() {
           title="Manually Distribute Surplus Work"
           subtitle={`Assigning ${selectedSurplus.quantity} surplus ${selectedSurplus.contentType}s for client ${selectedSurplus.clientName || selectedSurplus.clientId}`}
         >
-          <form onSubmit={handleAssign} className="space-y-4">
+          <form onSubmit={handleAssignSurplus} className="space-y-4">
             <Select
               label="Select Team Member"
               value={selectedEmpId}
@@ -366,9 +702,185 @@ export default function SurplusPage() {
                 type="submit"
                 variant="primary"
                 isLoading={isAssigning}
-                className="bg-slate-900 hover:bg-slate-800 text-white font-semibold"
+                className="bg-slate-900 hover:bg-slate-800 text-white font-bold"
               >
-                Distribute Deliverable
+                Confirm Assignment
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* 2. Modal: Add New Surplus Deliverable */}
+      {isAddSurplusModalOpen && (
+        <Modal
+          isOpen={isAddSurplusModalOpen}
+          onClose={() => !isCreatingSurplus && setIsAddSurplusModalOpen(false)}
+          title="Log Extra Surplus Deliverable"
+          subtitle="Record surplus client deliverables that exceed normal contract quotas"
+        >
+          <form onSubmit={handleCreateSurplus} className="space-y-4">
+            <Select
+              label="Select Client"
+              value={newSurplusData.clientId}
+              onChange={(e) => setNewSurplusData({ ...newSurplusData, clientId: e.target.value })}
+              options={[
+                { value: '', label: '-- Choose Client --' },
+                ...clients.map((c) => ({ value: c.id, label: `${c.name} (${c.clientCode || 'Client'})` })),
+              ]}
+              required
+            />
+
+            <Select
+              label="Target Work Week"
+              value={newSurplusData.weekId}
+              onChange={(e) => setNewSurplusData({ ...newSurplusData, weekId: e.target.value })}
+              options={[
+                { value: '', label: '-- Choose Week --' },
+                ...weeks.map((w) => ({ value: w.id, label: `${w.name} (${w.startDate})` })),
+              ]}
+              required
+            />
+
+            <div className="grid grid-cols-2 gap-3">
+              <Select
+                label="Content Type"
+                value={newSurplusData.contentType}
+                onChange={(e) => setNewSurplusData({
+                  ...newSurplusData,
+                  contentType: e.target.value,
+                  roleRequired: e.target.value === 'post' ? 'graphic_designer' : 'video_editor',
+                })}
+                options={[
+                  { value: 'post', label: 'Graphic Post' },
+                  { value: 'reel', label: 'Video Reel' },
+                  { value: 'story', label: 'Story Slide' },
+                ]}
+              />
+
+              <Input
+                label="Quantity"
+                type="number"
+                min="1"
+                value={newSurplusData.quantity}
+                onChange={(e) => setNewSurplusData({ ...newSurplusData, quantity: Number(e.target.value) || 1 })}
+                required
+              />
+            </div>
+
+            <Textarea
+              label="Surplus Reason / Note"
+              placeholder="e.g. Urgent extra festival campaign requested by client"
+              value={newSurplusData.reason}
+              onChange={(e) => setNewSurplusData({ ...newSurplusData, reason: e.target.value })}
+              rows={2}
+            />
+
+            <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+              <Button
+                variant="secondary"
+                onClick={() => setIsAddSurplusModalOpen(false)}
+                disabled={isCreatingSurplus}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                variant="primary"
+                isLoading={isCreatingSurplus}
+                className="bg-slate-900 hover:bg-slate-800 text-white font-bold"
+              >
+                Save Surplus Item
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* 3. Modal: Direct Manual Allocation */}
+      {isDirectAllocModalOpen && (
+        <Modal
+          isOpen={isDirectAllocModalOpen}
+          onClose={() => !isCreatingDirectAlloc && setIsDirectAllocModalOpen(false)}
+          title="Direct Manual Work Allocation"
+          subtitle="Assign client deliverables directly to a specific team member"
+        >
+          <form onSubmit={handleCreateDirectAllocation} className="space-y-4">
+            <Select
+              label="Select Client"
+              value={directAllocData.clientId}
+              onChange={(e) => setDirectAllocData({ ...directAllocData, clientId: e.target.value })}
+              options={[
+                { value: '', label: '-- Choose Client --' },
+                ...clients.map((c) => ({ value: c.id, label: `${c.name} (${c.clientCode || 'Client'})` })),
+              ]}
+              required
+            />
+
+            <Select
+              label="Select Team Member"
+              value={directAllocData.employeeId}
+              onChange={(e) => setDirectAllocData({ ...directAllocData, employeeId: e.target.value })}
+              options={[
+                { value: '', label: '-- Choose Staff Member --' },
+                ...employees.map((e) => ({
+                  value: e.id,
+                  label: `${e.name} (${e.employeeCode || 'Staff'}) - ${e.role?.replace(/_/g, ' ')}`,
+                })),
+              ]}
+              required
+            />
+
+            <Select
+              label="Target Work Week"
+              value={directAllocData.weekId}
+              onChange={(e) => setDirectAllocData({ ...directAllocData, weekId: e.target.value })}
+              options={[
+                { value: '', label: '-- Choose Week --' },
+                ...weeks.map((w) => ({ value: w.id, label: `${w.name} (${w.startDate})` })),
+              ]}
+              required
+            />
+
+            <div className="grid grid-cols-3 gap-3">
+              <Input
+                label="Posts"
+                type="number"
+                min="0"
+                value={directAllocData.posts}
+                onChange={(e) => setDirectAllocData({ ...directAllocData, posts: Number(e.target.value) || 0 })}
+              />
+              <Input
+                label="Reels"
+                type="number"
+                min="0"
+                value={directAllocData.reels}
+                onChange={(e) => setDirectAllocData({ ...directAllocData, reels: Number(e.target.value) || 0 })}
+              />
+              <Input
+                label="Stories"
+                type="number"
+                min="0"
+                value={directAllocData.stories}
+                onChange={(e) => setDirectAllocData({ ...directAllocData, stories: Number(e.target.value) || 0 })}
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+              <Button
+                variant="secondary"
+                onClick={() => setIsDirectAllocModalOpen(false)}
+                disabled={isCreatingDirectAlloc}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                variant="primary"
+                isLoading={isCreatingDirectAlloc}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold"
+              >
+                Confirm Direct Allocation
               </Button>
             </div>
           </form>

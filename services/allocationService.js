@@ -195,6 +195,98 @@ export async function assignSurplusWorkManually({
   return { success: true };
 }
 
+export async function createSurplusWorkRecord({
+  clientId,
+  clientName = '',
+  weekId,
+  contentType,
+  roleRequired,
+  quantity,
+  reason = 'MANUAL_ENTRY',
+  reasonLabel = 'Manually logged surplus deliverable',
+  adminId = 'admin'
+}) {
+  const clientsList = await fetchCollection('clients');
+  const matchedClient = (clientsList || []).find((c) => c.id === clientId);
+
+  const res = await saveDocument(SURPLUS_COLLECTION, {
+    clientId,
+    clientName: clientName || matchedClient?.name || '',
+    weekId,
+    contentType,
+    roleRequired,
+    quantity: Number(quantity) || 1,
+    reason,
+    reasonLabel,
+    status: 'unassigned',
+    assignedToEmployeeId: null,
+  });
+
+  await logAuditAction({
+    action: 'SURPLUS_MANUAL_CREATED',
+    entityType: 'surplusWork',
+    entityId: res.id,
+    description: `Manually added surplus deliverable for client ${clientName || clientId}: ${quantity} ${contentType}`,
+    adminId,
+  });
+
+  return res;
+}
+
+export async function createDirectManualAllocation({
+  clientId,
+  clientName = '',
+  employeeId,
+  weekId,
+  work = { posts: 0, reels: 0, stories: 0 },
+  manualOverride = false,
+  overrideReason = '',
+  capacityRules = [],
+  adminId = 'admin'
+}) {
+  const clientsList = await fetchCollection('clients');
+  const employeesList = await fetchCollection('employees');
+  const matchedClient = (clientsList || []).find((c) => c.id === clientId);
+  const employee = (employeesList || []).find((e) => e.id === employeeId);
+
+  if (!employee) throw new Error('Employee not found');
+
+  const postsUnits = convertTaskToCapacityUnits('post', employee.role, work.posts || 0, capacityRules);
+  const reelsUnits = convertTaskToCapacityUnits('reel', employee.role, work.reels || 0, capacityRules);
+  const storiesUnits = convertTaskToCapacityUnits('story', employee.role, work.stories || 0, capacityRules);
+  const capacityUsed = postsUnits + reelsUnits + storiesUnits;
+
+  const res = await saveDocument(ALLOCATIONS_COLLECTION, {
+    clientId,
+    clientName: clientName || matchedClient?.name || '',
+    employeeId: employee.id,
+    employeeName: employee.name,
+    employeeCode: employee.employeeCode || '',
+    employeeRole: employee.role || '',
+    weekId,
+    date: null,
+    work: {
+      posts: Number(work.posts) || 0,
+      reels: Number(work.reels) || 0,
+      stories: Number(work.stories) || 0,
+    },
+    capacityUsed,
+    assignmentType: 'manual',
+    manualOverride: Boolean(manualOverride),
+    overrideReason: overrideReason.trim(),
+  });
+
+  await logAuditAction({
+    action: 'DIRECT_ALLOCATION_CREATED',
+    entityType: 'allocation',
+    entityId: res.id,
+    description: `Direct manual allocation created for ${employee.name}: ${work.posts}P, ${work.reels}R, ${work.stories}S`,
+    adminId,
+  });
+
+  return res;
+}
+
 export async function deleteAllocation(id, adminId = 'admin') {
   await removeDocument(ALLOCATIONS_COLLECTION, id);
   await logAuditAction({
