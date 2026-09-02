@@ -1,9 +1,10 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import Image from 'next/image';
+import { subscribeSurplusWork } from '@/services/allocationService';
 import {
   LayoutDashboard,
   Building2,
@@ -29,7 +30,7 @@ const NAV_ITEMS = [
   { href: '/availability', label: 'Employee Availability', icon: CalendarCheck },
   { href: '/requirements', label: 'Work Requirements', icon: ClipboardList },
   { href: '/allocations', label: 'Auto Allocation', icon: Sparkles, highlight: true },
-  { href: '/surplus', label: 'Surplus Work', icon: AlertOctagon },
+  { href: '/surplus', label: 'Surplus Work', icon: AlertOctagon, isSurplus: true },
   { href: '/history', label: 'Allocation History', icon: History },
   { href: '/matrix', label: 'Workload Matrix', icon: Grid },
   { href: '/settings', label: 'Settings & Audit', icon: Settings },
@@ -37,6 +38,17 @@ const NAV_ITEMS = [
 
 export default function Sidebar({ onClose, isMobile = false }) {
   const pathname = usePathname();
+  const [surplusCount, setSurplusCount] = useState(0);
+
+  useEffect(() => {
+    const unsub = subscribeSurplusWork((data) => {
+      const pending = (data || []).filter((s) => s.status !== 'assigned').length;
+      setSurplusCount(pending);
+    });
+    return () => {
+      if (unsub) unsub();
+    };
+  }, []);
 
   return (
     <aside className="flex flex-col h-full bg-white border-r border-slate-200 w-72 select-none">
@@ -90,12 +102,21 @@ export default function Sidebar({ onClose, isMobile = false }) {
                   ? 'bg-slate-900 text-white shadow-sm font-bold'
                   : item.highlight
                   ? 'text-indigo-700 hover:bg-indigo-50 font-bold'
+                  : item.isSurplus && surplusCount > 0
+                  ? 'text-rose-700 hover:bg-rose-50 font-bold'
                   : 'text-slate-700 hover:text-slate-950 hover:bg-slate-100'
               }`}
             >
-              <Icon className={`w-4 h-4 flex-shrink-0 ${isActive ? 'text-white' : item.highlight ? 'text-indigo-600' : 'text-slate-500'}`} />
+              <Icon className={`w-4 h-4 flex-shrink-0 ${
+                isActive ? 'text-white' : item.isSurplus && surplusCount > 0 ? 'text-rose-600' : item.highlight ? 'text-indigo-600' : 'text-slate-500'
+              }`} />
               <span className="truncate">{item.label}</span>
-              {item.highlight && !isActive && (
+              {item.isSurplus && surplusCount > 0 && (
+                <span className="ml-auto text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 animate-pulse">
+                  {surplusCount}
+                </span>
+              )}
+              {item.highlight && !isActive && !item.isSurplus && (
                 <span className="ml-auto w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
               )}
             </Link>
