@@ -31,7 +31,7 @@ import {
   Calendar,
   Sparkles
 } from 'lucide-react';
-import { ROLES, ROLE_OPTIONS } from '@/lib/constants';
+import { ROLES, ROLE_OPTIONS, normalizeRole } from '@/lib/constants';
 
 export default function EmployeesPage() {
   const [employees, setEmployees] = useState([]);
@@ -90,10 +90,11 @@ export default function EmployeesPage() {
 
   const openEditModal = (emp) => {
     setEditingEmp(emp);
+    const resolvedRole = normalizeRole(emp.role, emp.employeeCode);
     setFormData({
       name: emp.name || '',
       employeeCode: emp.employeeCode || '',
-      role: emp.role || ROLES.GRAPHIC_DESIGNER,
+      role: resolvedRole || ROLES.GRAPHIC_DESIGNER,
       customCapacityRuleId: emp.customCapacityRuleId || '',
       status: emp.status || 'active',
     });

@@ -6,7 +6,7 @@ import {
   removeDocument
 } from '@/lib/storageSync';
 import { logAuditAction } from './auditService';
-import { ROLES } from '@/lib/constants';
+import { ROLES, normalizeRole } from '@/lib/constants';
 
 const COLLECTION_NAME = 'employees';
 
@@ -24,10 +24,13 @@ export async function getEmployeeById(id) {
 }
 
 export async function createEmployee(empData, adminId = 'admin') {
+  const code = (empData.employeeCode || '').trim().toUpperCase();
+  const normalizedRole = normalizeRole(empData.role, code);
+
   const payload = {
-    employeeCode: (empData.employeeCode || '').trim().toUpperCase(),
+    employeeCode: code,
     name: empData.name.trim(),
-    role: empData.role || ROLES.GRAPHIC_DESIGNER,
+    role: normalizedRole || ROLES.GRAPHIC_DESIGNER,
     customCapacityRuleId: empData.customCapacityRuleId || null,
     status: empData.status || 'active',
   };
@@ -45,10 +48,13 @@ export async function createEmployee(empData, adminId = 'admin') {
 }
 
 export async function updateEmployee(id, empData, adminId = 'admin') {
+  const code = (empData.employeeCode || '').trim().toUpperCase();
+  const normalizedRole = normalizeRole(empData.role, code);
+
   const payload = {
-    employeeCode: (empData.employeeCode || '').trim().toUpperCase(),
+    employeeCode: code,
     name: empData.name.trim(),
-    role: empData.role || ROLES.GRAPHIC_DESIGNER,
+    role: normalizedRole || ROLES.GRAPHIC_DESIGNER,
     customCapacityRuleId: empData.customCapacityRuleId || null,
     status: empData.status || 'active',
   };
