@@ -46,21 +46,19 @@ export async function commitWeeklyAllocation({
 }) {
   const clientsList = await fetchCollection('clients');
 
-  // 1. If recalculating, clean up existing records for this week
-  if (recalculate) {
-    const existingAlloc = await fetchCollection(ALLOCATIONS_COLLECTION);
-    const existingSurplus = await fetchCollection(SURPLUS_COLLECTION);
+  // 1. Clean up existing automatic records for this week to prevent duplication
+  const existingAlloc = await fetchCollection(ALLOCATIONS_COLLECTION);
+  const existingSurplus = await fetchCollection(SURPLUS_COLLECTION);
 
-    for (const a of existingAlloc) {
-      if (a.weekId === weekId && (!clientId || a.clientId === clientId)) {
-        await removeDocument(ALLOCATIONS_COLLECTION, a.id);
-      }
+  for (const a of existingAlloc) {
+    if (a.weekId === weekId && (!clientId || a.clientId === clientId)) {
+      await removeDocument(ALLOCATIONS_COLLECTION, a.id);
     }
+  }
 
-    for (const s of existingSurplus) {
-      if (s.weekId === weekId && (!clientId || s.clientId === clientId)) {
-        await removeDocument(SURPLUS_COLLECTION, s.id);
-      }
+  for (const s of existingSurplus) {
+    if (s.weekId === weekId && (!clientId || s.clientId === clientId)) {
+      await removeDocument(SURPLUS_COLLECTION, s.id);
     }
   }
 

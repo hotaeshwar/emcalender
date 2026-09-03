@@ -6,6 +6,7 @@ import Card, { CardHeader } from '@/components/common/Card';
 import Button from '@/components/common/Button';
 import Badge from '@/components/common/Badge';
 import Select from '@/components/common/Select';
+import Input from '@/components/common/Input';
 import DownloadExcelButton from '@/components/common/DownloadExcelButton';
 import { SkeletonTable } from '@/components/common/LoadingSkeleton';
 import EmptyState from '@/components/common/EmptyState';
@@ -26,9 +27,11 @@ import {
   ChevronRight,
   Clock,
   CheckCircle2,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Search,
+  RotateCcw
 } from 'lucide-react';
-import { ROLES } from '@/lib/constants';
+import { ROLES, ROLE_OPTIONS } from '@/lib/constants';
 
 export default function HistoryPage() {
   const [allocations, setAllocations] = useState([]);
@@ -36,7 +39,9 @@ export default function HistoryPage() {
   const [clients, setClients] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [capacityRules, setCapacityRules] = useState([]);
-  const [selectedWeekId, setSelectedWeekId] = useState('');
+  const [selectedWeekId, setSelectedWeekId] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [roleFilter, setRoleFilter] = useState('all');
   const [expandedAllocId, setExpandedAllocId] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -45,9 +50,6 @@ export default function HistoryPage() {
   useEffect(() => {
     const unsubWeeks = subscribeWorkWeeks((data) => {
       setWeeks(data || []);
-      if (data && data.length > 0 && !selectedWeekId) {
-        setSelectedWeekId(data[0].id);
-      }
     });
 
     const unsubClients = subscribeClients(setClients);
@@ -66,11 +68,24 @@ export default function HistoryPage() {
       if (unsubRules) unsubRules();
       if (unsubAllocations) unsubAllocations();
     };
-  }, [selectedWeekId]);
+  }, []);
 
-  const filteredAllocations = selectedWeekId
-    ? allocations.filter((a) => a.weekId === selectedWeekId)
-    : allocations;
+  const filteredAllocations = allocations.filter((a) => {
+    if (selectedWeekId && selectedWeekId !== 'all') {
+      const matchWeek = a.weekId === selectedWeekId || (a.weekName && a.weekName === selectedWeekId);
+      if (!matchWeek) return false;
+    }
+    if (roleFilter !== 'all' && (a.employeeRole || '').toLowerCase() !== roleFilter.toLowerCase()) {
+      return false;
+    }
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const matchClient = (a.clientName || '').toLowerCase().includes(q) || (a.clientId || '').toLowerCase().includes(q);
+      const matchEmp = (a.employeeName || '').toLowerCase().includes(q) || (a.employeeCode || '').toLowerCase().includes(q);
+      if (!matchClient && !matchEmp) return false;
+    }
+    return true;
+  });
 
   const currentWeek = weeks.find((w) => w.id === selectedWeekId) || weeks[0];
 
@@ -110,10 +125,13 @@ export default function HistoryPage() {
               <Select
                 value={selectedWeekId}
                 onChange={(e) => setSelectedWeekId(e.target.value)}
-                options={weeks.map((w) => ({
-                  value: w.id,
-                  label: `${w.name} (${w.startDate})`,
-                }))}
+                options={[
+                  { value: 'all', label: 'All Work Weeks' },
+                  ...weeks.map((w) => ({
+                    value: w.id,
+                    label: `${w.name} (${w.startDate})`,
+                  })),
+                ]}
               />
             </div>
           </div>
@@ -124,6 +142,50 @@ export default function HistoryPage() {
               label="Download Report (Excel)"
               size="sm"
             />
+          </div>
+        </div>
+
+        {/* Filter Controls Bar */}
+        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+          <div className="flex flex-1 items-center gap-3">
+            <div className="relative flex-1 max-w-md">
+              <Input
+                placeholder="Search by client or staff name..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                icon={Search}
+              />
+            </div>
+
+            <div className="w-48">
+              <Select
+                value={roleFilter}
+                onChange={(e) => setRoleFilter(e.target.value)}
+                options={[
+                  { value: 'all', label: 'All Roles' },
+                  ...ROLE_OPTIONS,
+                ]}
+              />
+            </div>
+
+            {(searchQuery || roleFilter !== 'all' || selectedWeekId !== 'all') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('');
+                  setRoleFilter('all');
+                  setSelectedWeekId('all');
+                }}
+                className="px-3 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-200 rounded-xl flex items-center gap-1.5 transition-all"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset</span>
+              </button>
+            )}
+          </div>
+
+          <div className="text-xs font-extrabold text-slate-700 bg-white px-3 py-1.5 rounded-xl border border-slate-200">
+            Showing {filteredAllocations.length} of {allocations.length} Records
           </div>
         </div>
 

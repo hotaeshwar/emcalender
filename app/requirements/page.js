@@ -41,6 +41,8 @@ export default function RequirementsPage() {
   const [loading, setLoading] = useState(true);
 
   const [selectedWeekFilter, setSelectedWeekFilter] = useState('all');
+  const [clientFilter, setClientFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -89,7 +91,7 @@ export default function RequirementsPage() {
   const openCreateModal = () => {
     setEditingReq(null);
     const defaultWeek = selectedWeekFilter !== 'all' ? selectedWeekFilter : (weeks[0]?.id || '');
-    const defaultClient = clients[0]?.id || '';
+    const defaultClient = clientFilter !== 'all' ? clientFilter : (clients[0]?.id || '');
 
     setFormData({
       clientId: defaultClient,
@@ -175,8 +177,15 @@ export default function RequirementsPage() {
   };
 
   const filteredRequirements = requirements.filter((r) => {
-    if (selectedWeekFilter === 'all') return true;
-    return r.weekId === selectedWeekFilter;
+    if (selectedWeekFilter !== 'all' && r.weekId !== selectedWeekFilter) return false;
+    if (clientFilter !== 'all' && r.clientId !== clientFilter) return false;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const matchClient = (r.clientName || '').toLowerCase().includes(q) || (r.clientId || '').toLowerCase().includes(q);
+      const matchNotes = (r.notes || '').toLowerCase().includes(q);
+      if (!matchClient && !matchNotes) return false;
+    }
+    return true;
   });
 
   return (
@@ -187,7 +196,7 @@ export default function RequirementsPage() {
       <div className="space-y-6 bg-white">
         {/* Controls Bar */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-4 rounded-2xl bg-white border border-slate-200 shadow-sm">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
               Filter by Week:
             </span>
@@ -214,6 +223,48 @@ export default function RequirementsPage() {
           </Button>
         </div>
 
+        {/* Filter Bar */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-4 rounded-2xl bg-slate-50 border border-slate-200">
+          <div className="flex flex-1 items-center gap-3">
+            <div className="relative flex-1 max-w-md">
+              <Input
+                placeholder="Search by client name or notes..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                icon={Search}
+              />
+            </div>
+
+            <div className="w-56">
+              <Select
+                value={clientFilter}
+                onChange={(e) => setClientFilter(e.target.value)}
+                options={[
+                  { value: 'all', label: 'All Clients' },
+                  ...clients.map((c) => ({ value: c.id, label: c.name })),
+                ]}
+              />
+            </div>
+
+            {(searchQuery || clientFilter !== 'all') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('');
+                  setClientFilter('all');
+                }}
+                className="px-3 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-200 rounded-xl flex items-center gap-1.5 transition-all"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+
+          <div className="text-xs font-extrabold text-slate-700 bg-white px-3 py-1.5 rounded-xl border border-slate-200">
+            Showing {filteredRequirements.length} of {requirements.length} Requirements
+          </div>
+        </div>
+
         {/* Warning if No Masters */}
         {(clients.length === 0 || weeks.length === 0) && !loading && (
           <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-center gap-3">
@@ -229,10 +280,21 @@ export default function RequirementsPage() {
         ) : filteredRequirements.length === 0 ? (
           <EmptyState
             icon={ClipboardList}
-            title="No Requirements Entered"
-            description="Add deliverable requirements for your clients for this week."
-            actionLabel="Add Requirement"
-            onAction={openCreateModal}
+            title={searchQuery || clientFilter !== 'all' || selectedWeekFilter !== 'all' ? 'No Matching Requirements' : 'No Requirements Entered'}
+            description={
+              searchQuery || clientFilter !== 'all' || selectedWeekFilter !== 'all'
+                ? 'Try resetting the search query or week/client filters.'
+                : 'Add deliverable requirements for your clients for this week.'
+            }
+            actionLabel={searchQuery || clientFilter !== 'all' ? 'Clear Filters' : 'Add Requirement'}
+            onAction={() => {
+              if (searchQuery || clientFilter !== 'all') {
+                setSearchQuery('');
+                setClientFilter('all');
+              } else {
+                openCreateModal();
+              }
+            }}
           />
         ) : (
           <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">

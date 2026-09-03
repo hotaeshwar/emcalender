@@ -8,15 +8,29 @@ export default function AgencyMatrixGrid({
   employees = [],
   allocations = [],
   dayName = null,
+  searchQuery = '',
+  clientFilter = 'all',
+  employeeFilter = 'all',
+  roleFilter = 'all',
 }) {
   const displayHeader = dayName
     ? dayName.toUpperCase()
     : week?.name
     ? `${week.name.toUpperCase()} (MON–SAT)`
     : 'WEEKLY SCHEDULE';
-  // Build staff list strictly from active employees passed in from Firebase
+
+  // Build staff list strictly from active employees passed in from Firebase, filtered by role/staff/search
   const staffList = (employees || [])
     .filter((e) => e && e.name && e.status !== 'inactive')
+    .filter((e) => {
+      if (employeeFilter !== 'all' && e.id !== employeeFilter && e.employeeCode !== employeeFilter) {
+        return false;
+      }
+      if (roleFilter !== 'all' && (e.role || '').toLowerCase() !== roleFilter.toLowerCase()) {
+        return false;
+      }
+      return true;
+    })
     .map((e) => ({
       id: e.id || e.employeeCode,
       name: e.name.toUpperCase(),
@@ -24,9 +38,27 @@ export default function AgencyMatrixGrid({
       role: e.role || 'graphic_designer',
     }));
 
-  // Build client list strictly from clients passed in from Firebase
+  // Build client list strictly from clients passed in from Firebase, filtered by client/search
   const clientList = (clients || [])
     .filter((c) => c && c.name && c.status !== 'inactive')
+    .filter((c) => {
+      if (clientFilter !== 'all' && c.id !== clientFilter && c.clientCode !== clientFilter) {
+        return false;
+      }
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        const matchesClient = (c.name || '').toLowerCase().includes(query) || (c.clientCode || '').toLowerCase().includes(query);
+        if (!matchesClient) {
+          // Check if any allocation for this client matches search
+          const hasMatchingAlloc = (allocations || []).some(
+            (a) => (a.clientId === c.id || a.clientName === c.name) &&
+                   ((a.employeeName || '').toLowerCase().includes(query) || (a.employeeCode || '').toLowerCase().includes(query))
+          );
+          if (!hasMatchingAlloc) return false;
+        }
+      }
+      return true;
+    })
     .map((c) => ({
       id: c.id || c.clientCode,
       name: c.name.toUpperCase(),
@@ -122,14 +154,21 @@ export default function AgencyMatrixGrid({
 
   clientList.forEach((client) => {
     let cp = 0;
-    let cr = 0;
+    let crGd = 0;
+    let crVe = 0;
     let cs = 0;
 
     staffList.forEach((s) => {
       const work = getWorkCell(client, s);
+      const isVE = (s.role || '').toLowerCase() === 'video_editor';
+
       cp += work.posts;
-      cr += work.reels;
       cs += work.stories;
+      if (isVE) {
+        crVe += work.reels;
+      } else {
+        crGd += work.reels;
+      }
 
       const sKey = (s.name || s.id).toUpperCase();
       if (!staffTotals[sKey]) staffTotals[sKey] = { posts: 0, reels: 0, stories: 0 };
@@ -138,6 +177,7 @@ export default function AgencyMatrixGrid({
       staffTotals[sKey].stories += work.stories;
     });
 
+    const cr = Math.max(crGd, crVe);
     const totalCount = cp + cr + cs;
     clientTotals[(client.name || client.id).toUpperCase()] = { posts: cp, reels: cr, stories: cs, totalCount };
 

@@ -18,7 +18,10 @@ import {
   createSurplusWorkRecord,
   createDirectManualAllocation
 } from '@/services/allocationService';
-import { subscribeEmployees } from '@/services/employeeService';
+import {
+  subscribeEmployees,
+  createEmployee
+} from '@/services/employeeService';
 import { subscribeClients } from '@/services/clientService';
 import { subscribeWorkWeeks } from '@/services/weekService';
 import { subscribeCapacityRules } from '@/services/capacityService';
@@ -45,9 +48,13 @@ import {
   Clock,
   ArrowRight,
   HelpCircle,
-  FileCheck
+  FileCheck,
+  Search,
+  Filter,
+  RotateCcw,
+  UserPlus
 } from 'lucide-react';
-import { ROLES, ROLE_LABELS, CONTENT_TYPES } from '@/lib/constants';
+import { ROLES, ROLE_LABELS, ROLE_OPTIONS, CONTENT_TYPES } from '@/lib/constants';
 
 export default function SurplusPage() {
   const [surplusList, setSurplusList] = useState([]);
@@ -57,8 +64,14 @@ export default function SurplusPage() {
   const [capacityRules, setCapacityRules] = useState([]);
   const [allocations, setAllocations] = useState([]);
   const [selectedWeekId, setSelectedWeekId] = useState('all');
-  const [surplusTab, setSurplusTab] = useState('unassigned'); // 'unassigned' | 'assigned'
+  const [surplusTab, setSurplusTab] = useState('unassigned'); // 'unassigned' | 'assigned' | 'all'
   const [loading, setLoading] = useState(true);
+
+  // Filter States
+  const [searchQuery, setSearchQuery] = useState('');
+  const [clientFilter, setClientFilter] = useState('all');
+  const [roleFilter, setRoleFilter] = useState('all');
+  const [contentTypeFilter, setContentTypeFilter] = useState('all');
 
   // 1. Manual Surplus Assignment Modal
   const [selectedSurplus, setSelectedSurplus] = useState(null);
@@ -68,7 +81,18 @@ export default function SurplusPage() {
   const [overrideReason, setOverrideReason] = useState('');
   const [isAssigning, setIsAssigning] = useState(false);
 
-  // 2. Add New Surplus Item Modal
+  // 2. Quick Add Employee Modal State
+  const [isQuickAddEmpModalOpen, setIsQuickAddEmpModalOpen] = useState(false);
+  const [quickEmpData, setQuickEmpData] = useState({
+    name: '',
+    employeeCode: '',
+    role: ROLES.GRAPHIC_DESIGNER,
+    dailyCapacityUnits: 7,
+    status: 'active',
+  });
+  const [isCreatingQuickEmp, setIsCreatingQuickEmp] = useState(false);
+
+  // 3. Add New Surplus Item Modal
   const [isAddSurplusModalOpen, setIsAddSurplusModalOpen] = useState(false);
   const [newSurplusData, setNewSurplusData] = useState({
     clientId: '',
@@ -80,7 +104,7 @@ export default function SurplusPage() {
   });
   const [isCreatingSurplus, setIsCreatingSurplus] = useState(false);
 
-  // 3. Direct Manual Allocation Modal
+  // 4. Direct Manual Allocation Modal
   const [isDirectAllocModalOpen, setIsDirectAllocModalOpen] = useState(false);
   const [directAllocData, setDirectAllocData] = useState({
     clientId: '',
@@ -106,9 +130,6 @@ export default function SurplusPage() {
     const unsubClients = subscribeClients(setClients);
     const unsubWeeks = subscribeWorkWeeks((wList) => {
       setWeeks(wList || []);
-      if (wList && wList.length > 0 && selectedWeekId === 'all') {
-        // keep 'all' or default
-      }
     });
     const unsubRules = subscribeCapacityRules(setCapacityRules);
     const unsubAlloc = subscribeAllocations(setAllocations);
@@ -123,13 +144,33 @@ export default function SurplusPage() {
     };
   }, [selectedWeekId]);
 
-  // Filter list by selected week
-  const filteredSurplusList = selectedWeekId === 'all'
-    ? surplusList
-    : surplusList.filter((s) => s.weekId === selectedWeekId);
+  // Filter list by selected week, tab, role, content type, client, and search
+  const filteredSurplusList = surplusList.filter((s) => {
+    if (selectedWeekId !== 'all' && s.weekId !== selectedWeekId) return false;
+    if (clientFilter !== 'all' && s.clientId !== clientFilter) return false;
+    if (roleFilter !== 'all' && (s.roleRequired || '').toLowerCase() !== roleFilter.toLowerCase()) return false;
+    if (contentTypeFilter !== 'all' && (s.contentType || '').toLowerCase() !== contentTypeFilter.toLowerCase()) return false;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const matchClient = (s.clientName || '').toLowerCase().includes(q) || (s.clientId || '').toLowerCase().includes(q);
+      const matchReason = (s.reason || '').toLowerCase().includes(q) || (s.reasonLabel || '').toLowerCase().includes(q);
+      const matchEmp = (s.assignedToEmployeeName || '').toLowerCase().includes(q);
+      if (!matchClient && !matchReason && !matchEmp) return false;
+    }
+    return true;
+  });
 
   const unassignedSurplus = filteredSurplusList.filter((s) => s.status !== 'assigned');
   const assignedSurplus = filteredSurplusList.filter((s) => s.status === 'assigned');
+
+  const hasActiveFilters = searchQuery || clientFilter !== 'all' || roleFilter !== 'all' || contentTypeFilter !== 'all';
+
+  const resetFilters = () => {
+    setSearchQuery('');
+    setClientFilter('all');
+    setRoleFilter('all');
+    setContentTypeFilter('all');
+  };
 
   // --- Handlers ---
   const openAssignModal = (surplusItem) => {
@@ -199,6 +240,46 @@ export default function SurplusPage() {
       error('Failed to assign surplus work.');
     } finally {
       setIsAssigning(false);
+    }
+  };
+
+  const handleCreateQuickEmployee = async (e) => {
+    e.preventDefault();
+    if (!quickEmpData.name.trim()) {
+      error('Please enter team member name.');
+      return;
+    }
+    setIsCreatingQuickEmp(true);
+    try {
+      const code = quickEmpData.employeeCode.trim() || `EMP${Math.floor(100 + Math.random() * 900)}`;
+      const created = await createEmployee({
+        name: quickEmpData.name.trim(),
+        employeeCode: code,
+        role: quickEmpData.role,
+        dailyCapacityUnits: Number(quickEmpData.dailyCapacityUnits) || (quickEmpData.role === 'video_editor' ? 4 : 7),
+        status: 'active',
+      });
+
+      success(`Added new staff member "${quickEmpData.name}"!`);
+      if (selectedSurplus) {
+        setSelectedEmpId(created.id);
+      }
+      if (isDirectAllocModalOpen) {
+        setDirectAllocData((prev) => ({ ...prev, employeeId: created.id }));
+      }
+      setIsQuickAddEmpModalOpen(false);
+      setQuickEmpData({
+        name: '',
+        employeeCode: '',
+        role: ROLES.GRAPHIC_DESIGNER,
+        dailyCapacityUnits: 7,
+        status: 'active',
+      });
+    } catch (err) {
+      console.error(err);
+      error('Failed to add new employee.');
+    } finally {
+      setIsCreatingQuickEmp(false);
     }
   };
 
@@ -415,6 +496,81 @@ export default function SurplusPage() {
           </div>
         </div>
 
+        {/* Extended Interactive Filter Bar */}
+        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+          <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
+            {/* Search Input */}
+            <div className="relative flex-1 min-w-[220px]">
+              <Input
+                placeholder="Search by client, staff, or surplus reason..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                icon={Search}
+              />
+            </div>
+
+            {/* Filter Selects Grid */}
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className="w-40">
+                <Select
+                  value={roleFilter}
+                  onChange={(e) => setRoleFilter(e.target.value)}
+                  options={[
+                    { value: 'all', label: 'All Roles' },
+                    ...ROLE_OPTIONS,
+                  ]}
+                />
+              </div>
+
+              <div className="w-40">
+                <Select
+                  value={contentTypeFilter}
+                  onChange={(e) => setContentTypeFilter(e.target.value)}
+                  options={[
+                    { value: 'all', label: 'All Types' },
+                    { value: 'post', label: 'Posts' },
+                    { value: 'reel', label: 'Reels' },
+                    { value: 'story', label: 'Stories' },
+                  ]}
+                />
+              </div>
+
+              <div className="w-48">
+                <Select
+                  value={clientFilter}
+                  onChange={(e) => setClientFilter(e.target.value)}
+                  options={[
+                    { value: 'all', label: 'All Clients' },
+                    ...clients.map((c) => ({ value: c.id, label: c.name })),
+                  ]}
+                />
+              </div>
+
+              {hasActiveFilters && (
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="px-3 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-200 rounded-xl flex items-center gap-1.5 transition-all"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Reset</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200">
+            <span className="font-extrabold text-slate-700">
+              Showing {surplusTab === 'unassigned' ? unassignedSurplus.length : assignedSurplus.length} items
+            </span>
+            {hasActiveFilters && (
+              <span className="text-indigo-700 font-bold bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                Filters Applied
+              </span>
+            )}
+          </div>
+        </div>
+
         {/* Explain How Surplus Works Banner */}
         <div className="p-4 rounded-2xl bg-indigo-50/70 border border-indigo-200 flex items-start justify-between gap-4 text-xs text-indigo-950">
           <div className="flex items-start gap-3">
@@ -612,27 +768,51 @@ export default function SurplusPage() {
           subtitle={`Assigning ${selectedSurplus.quantity} surplus ${selectedSurplus.contentType}s for client ${selectedSurplus.clientName || selectedSurplus.clientId}`}
         >
           <form onSubmit={handleAssignSurplus} className="space-y-4">
-            <Select
-              label="Select Team Member"
-              value={selectedEmpId}
-              onChange={(e) => setSelectedEmpId(e.target.value)}
-              options={employees
-                .filter((e) => e.status !== 'inactive')
-                .sort((a, b) => {
-                  const matchA = a.role === selectedSurplus.roleRequired ? 0 : 1;
-                  const matchB = b.role === selectedSurplus.roleRequired ? 0 : 1;
-                  return matchA - matchB;
-                })
-                .map((e) => {
-                  const isMatching = e.role === selectedSurplus.roleRequired;
-                  const roleLabel = e.role ? e.role.replace(/_/g, ' ') : '';
-                  return {
-                    value: e.id,
-                    label: `${e.name} (${e.employeeCode || 'Staff'}) - ${roleLabel}${isMatching ? ' ★ (Recommended)' : ''}`,
-                  };
-                })}
-              required
-            />
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">
+                  Select Team Member
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuickEmpData({
+                      name: '',
+                      employeeCode: '',
+                      role: selectedSurplus.roleRequired || ROLES.GRAPHIC_DESIGNER,
+                      dailyCapacityUnits: selectedSurplus.roleRequired === 'video_editor' ? 4 : 7,
+                      status: 'active',
+                    });
+                    setIsQuickAddEmpModalOpen(true);
+                  }}
+                  className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 hover:underline"
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  <span>+ Create New Staff Member</span>
+                </button>
+              </div>
+
+              <Select
+                value={selectedEmpId}
+                onChange={(e) => setSelectedEmpId(e.target.value)}
+                options={employees
+                  .filter((e) => e.status !== 'inactive')
+                  .sort((a, b) => {
+                    const matchA = a.role === selectedSurplus.roleRequired ? 0 : 1;
+                    const matchB = b.role === selectedSurplus.roleRequired ? 0 : 1;
+                    return matchA - matchB;
+                  })
+                  .map((e) => {
+                    const isMatching = e.role === selectedSurplus.roleRequired;
+                    const roleLabel = e.role ? e.role.replace(/_/g, ' ') : '';
+                    return {
+                      value: e.id,
+                      label: `${e.name} (${e.employeeCode || 'Staff'}) - ${roleLabel}${isMatching ? ' ★ (Recommended)' : ''}`,
+                    };
+                  })}
+                required
+              />
+            </div>
 
             <Input
               label="Quantity to Assign"
@@ -817,19 +997,43 @@ export default function SurplusPage() {
               required
             />
 
-            <Select
-              label="Select Team Member"
-              value={directAllocData.employeeId}
-              onChange={(e) => setDirectAllocData({ ...directAllocData, employeeId: e.target.value })}
-              options={[
-                { value: '', label: '-- Choose Staff Member --' },
-                ...employees.map((e) => ({
-                  value: e.id,
-                  label: `${e.name} (${e.employeeCode || 'Staff'}) - ${e.role?.replace(/_/g, ' ')}`,
-                })),
-              ]}
-              required
-            />
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">
+                  Select Team Member
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuickEmpData({
+                      name: '',
+                      employeeCode: '',
+                      role: ROLES.GRAPHIC_DESIGNER,
+                      dailyCapacityUnits: 7,
+                      status: 'active',
+                    });
+                    setIsQuickAddEmpModalOpen(true);
+                  }}
+                  className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 hover:underline"
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  <span>+ Create New Staff Member</span>
+                </button>
+              </div>
+
+              <Select
+                value={directAllocData.employeeId}
+                onChange={(e) => setDirectAllocData({ ...directAllocData, employeeId: e.target.value })}
+                options={[
+                  { value: '', label: '-- Choose Staff Member --' },
+                  ...employees.map((e) => ({
+                    value: e.id,
+                    label: `${e.name} (${e.employeeCode || 'Staff'}) - ${e.role?.replace(/_/g, ' ')}`,
+                  })),
+                ]}
+                required
+              />
+            </div>
 
             <Select
               label="Target Work Week"
@@ -881,6 +1085,80 @@ export default function SurplusPage() {
                 className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold"
               >
                 Confirm Direct Allocation
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* 4. Modal: Quick Add New Team Member Inline */}
+      {isQuickAddEmpModalOpen && (
+        <Modal
+          isOpen={isQuickAddEmpModalOpen}
+          onClose={() => !isCreatingQuickEmp && setIsQuickAddEmpModalOpen(false)}
+          title="Create New Team Member"
+          subtitle="Add a new Graphic Designer or Video Editor to immediately assign surplus deliverables"
+        >
+          <form onSubmit={handleCreateQuickEmployee} className="space-y-4">
+            <Input
+              label="Employee Full Name"
+              placeholder="e.g. Rahul Sharma"
+              value={quickEmpData.name}
+              onChange={(e) => setQuickEmpData({ ...quickEmpData, name: e.target.value })}
+              required
+            />
+
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label="Employee Code"
+                placeholder="e.g. GD03 or VE02"
+                value={quickEmpData.employeeCode}
+                onChange={(e) => setQuickEmpData({ ...quickEmpData, employeeCode: e.target.value })}
+              />
+
+              <Select
+                label="Role"
+                value={quickEmpData.role}
+                onChange={(e) => {
+                  const role = e.target.value;
+                  setQuickEmpData({
+                    ...quickEmpData,
+                    role,
+                    dailyCapacityUnits: role === 'video_editor' ? 4 : 7,
+                  });
+                }}
+                options={[
+                  { value: ROLES.GRAPHIC_DESIGNER, label: 'Graphic Designer (7 units/day)' },
+                  { value: ROLES.VIDEO_EDITOR, label: 'Video Editor (4 units/day)' },
+                ]}
+                required
+              />
+            </div>
+
+            <Input
+              label="Daily Capacity Quota (Units/Day)"
+              type="number"
+              min="1"
+              value={quickEmpData.dailyCapacityUnits}
+              onChange={(e) => setQuickEmpData({ ...quickEmpData, dailyCapacityUnits: Number(e.target.value) || 1 })}
+              required
+            />
+
+            <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+              <Button
+                variant="secondary"
+                onClick={() => setIsQuickAddEmpModalOpen(false)}
+                disabled={isCreatingQuickEmp}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                variant="primary"
+                isLoading={isCreatingQuickEmp}
+                className="bg-slate-900 hover:bg-slate-800 text-white font-bold"
+              >
+                Create Staff & Select
               </Button>
             </div>
           </form>

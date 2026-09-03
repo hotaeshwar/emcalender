@@ -30,6 +30,9 @@ import {
   Calendar,
   Sparkles,
   Info,
+  Search,
+  Filter,
+  RotateCcw,
   X
 } from 'lucide-react';
 
@@ -68,6 +71,8 @@ function getDistinctWeekdays(workingDates = []) {
 export default function WorkWeeksPage() {
   const [weeks, setWeeks] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -266,11 +271,22 @@ export default function WorkWeeksPage() {
       error('No work weeks found to export.');
       return;
     }
-    exportWorkWeeksReport(weeks);
+    exportWorkWeeksReport(filteredWeeks.length > 0 ? filteredWeeks : weeks);
     success('Color-coded Excel work weeks schedule downloaded!');
   };
 
   const effectiveDaysPreview = calculateWorkingDays(formData.workingDates, formData.holidays);
+
+  const filteredWeeks = weeks.filter((w) => {
+    const matchesSearch =
+      !searchQuery ||
+      (w.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      String(w.weekNumber || '').includes(searchQuery) ||
+      (w.startDate || '').includes(searchQuery) ||
+      (w.endDate || '').includes(searchQuery);
+    const matchesStatus = statusFilter === 'all' || (w.status || 'active') === statusFilter;
+    return matchesSearch && matchesStatus;
+  });
 
   return (
     <AppLayout
@@ -278,7 +294,7 @@ export default function WorkWeeksPage() {
       subtitle="Configure operational work weeks, select active weekdays (Monday-Saturday), and manage holiday deductions"
     >
       <div className="space-y-6 bg-white">
-        {/* Top Control Bar with Animated Excel Button */}
+        {/* Top Control Bar with Animated Excel Button & Add Button */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-4 rounded-2xl bg-white border border-slate-200 shadow-sm">
           <div className="text-xs text-slate-700 font-medium">
             <strong>Capacity Principle:</strong> Effective Days = Configured Working Days (Mon-Sat) − Public Holidays.
@@ -303,6 +319,52 @@ export default function WorkWeeksPage() {
           </div>
         </div>
 
+        {/* Filter Controls Bar */}
+        <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 p-4 rounded-2xl bg-slate-50 border border-slate-200">
+          <div className="flex flex-1 flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            <div className="relative flex-1 max-w-md">
+              <Input
+                placeholder="Search by week title, number, or date (e.g. Week 1, 2026-09)..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                icon={Search}
+              />
+            </div>
+
+            <div className="w-48">
+              <Select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                options={[
+                  { value: 'all', label: 'All Statuses' },
+                  { value: 'active', label: 'Active Weeks' },
+                  { value: 'draft', label: 'Draft Weeks' },
+                ]}
+              />
+            </div>
+
+            {(searchQuery || statusFilter !== 'all') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('');
+                  setStatusFilter('all');
+                }}
+                className="px-3 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-200 rounded-xl flex items-center gap-1.5 transition-all"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset Filters</span>
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-extrabold text-slate-700 bg-white px-3 py-1.5 rounded-xl border border-slate-200">
+              Showing {filteredWeeks.length} of {weeks.length} Work Weeks
+            </span>
+          </div>
+        </div>
+
         {/* Work Weeks Table View */}
         {loading ? (
           <SkeletonTable rows={4} cols={7} />
@@ -313,6 +375,17 @@ export default function WorkWeeksPage() {
             description="Create your first work week to enable deliverable assignment and capacity calculation."
             actionLabel="Create Work Week"
             onAction={openCreateModal}
+          />
+        ) : filteredWeeks.length === 0 ? (
+          <EmptyState
+            icon={CalendarDays}
+            title="No Matching Work Weeks Found"
+            description="Try clearing your search query or adjusting the status filter."
+            actionLabel="Clear Filters"
+            onAction={() => {
+              setSearchQuery('');
+              setStatusFilter('all');
+            }}
           />
         ) : (
           <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
@@ -331,7 +404,7 @@ export default function WorkWeeksPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-sm">
-                  {weeks.map((week, idx) => {
+                  {filteredWeeks.map((week, idx) => {
                     const activeDays = getDistinctWeekdays(week.workingDates || []);
 
                     return (

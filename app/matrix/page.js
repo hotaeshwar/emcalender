@@ -35,9 +35,11 @@ import {
   Sparkles,
   FileSpreadsheet,
   Layers,
-  Table
+  Table,
+  Search,
+  RotateCcw
 } from 'lucide-react';
-import { ROLES, AVAILABILITY_TYPES } from '@/lib/constants';
+import { ROLES, ROLE_OPTIONS, AVAILABILITY_TYPES } from '@/lib/constants';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -51,6 +53,10 @@ export default function WorkloadMatrixPage() {
   const [selectedWeekId, setSelectedWeekId] = useState('');
   const [activeTab, setActiveTab] = useState('grid'); // 'grid' | 'heatmap'
   const [loading, setLoading] = useState(true);
+
+  // Search and Filter States
+  const [searchQuery, setSearchQuery] = useState('');
+  const [roleFilter, setRoleFilter] = useState('all');
 
   const { success, error } = useToast();
 
@@ -83,7 +89,17 @@ export default function WorkloadMatrixPage() {
     };
   }, [selectedWeekId]);
 
-  const activeEmployees = employees.filter((e) => e.status !== 'inactive');
+  const activeEmployees = employees.filter((e) => {
+    if (e.status === 'inactive') return false;
+    if (roleFilter !== 'all' && (e.role || '').toLowerCase() !== roleFilter.toLowerCase()) return false;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const matchEmp = (e.name || '').toLowerCase().includes(q) || (e.employeeCode || '').toLowerCase().includes(q);
+      if (!matchEmp) return false;
+    }
+    return true;
+  });
+
   const selectedWeek = weeks.find((w) => w.id === selectedWeekId) || weeks[0];
 
   const workingDates = selectedWeek?.workingDates || [];
@@ -158,24 +174,59 @@ export default function WorkloadMatrixPage() {
                 }`}
               >
                 <Layers className="w-3.5 h-3.5" />
-                <span>Daily Heatmap</span>
+                <span>Capacity Heatmap</span>
               </button>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <DownloadExcelButton
-              onExport={handleExportMatrixExcel}
-              label="Download Matrix (Excel)"
-              size="sm"
-            />
+          <DownloadExcelButton
+            onExport={handleExportMatrixExcel}
+            label="Download Matrix (Excel)"
+            size="sm"
+          />
+        </div>
+
+        {/* Filter Controls Bar */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-4 rounded-2xl bg-slate-50 border border-slate-200">
+          <div className="flex flex-1 items-center gap-3">
+            <div className="relative flex-1 max-w-md">
+              <Input
+                placeholder="Search staff or client name..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                icon={Search}
+              />
+            </div>
+            <div className="w-48">
+              <Select
+                value={roleFilter}
+                onChange={(e) => setRoleFilter(e.target.value)}
+                options={[
+                  { value: 'all', label: 'All Roles' },
+                  ...ROLE_OPTIONS,
+                ]}
+              />
+            </div>
+            {(searchQuery || roleFilter !== 'all') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('');
+                  setRoleFilter('all');
+                }}
+                className="px-3 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-200 rounded-xl flex items-center gap-1.5 transition-all"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset</span>
+              </button>
+            )}
           </div>
         </div>
 
+        {/* Matrix Grid Content */}
         {loading ? (
-          <SkeletonTable rows={6} cols={7} />
+          <SkeletonTable rows={6} cols={8} />
         ) : activeTab === 'grid' ? (
-          /* Exact Matrix Grid Format Matching User Image */
           <div className="space-y-3">
             <div className="flex items-center justify-between px-1">
               <span className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">
@@ -191,6 +242,8 @@ export default function WorkloadMatrixPage() {
               clients={clients}
               employees={activeEmployees}
               allocations={filteredAllocations}
+              searchQuery={searchQuery}
+              roleFilter={roleFilter}
             />
           </div>
         ) : (

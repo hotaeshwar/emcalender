@@ -25,6 +25,7 @@ import { subscribeEmployeeAvailability } from '@/services/availabilityService';
 import { generateDailySchedule } from '@/lib/allocationEngine';
 import { exportAllocationReport } from '@/lib/exportExcel';
 import Link from 'next/link';
+import Input from '@/components/common/Input';
 import {
   Sparkles,
   Calendar,
@@ -38,9 +39,12 @@ import {
   FileSpreadsheet,
   Table,
   Clock,
-  List
+  List,
+  Search,
+  Filter,
+  RotateCcw
 } from 'lucide-react';
-import { ROLES } from '@/lib/constants';
+import { ROLES, ROLE_OPTIONS } from '@/lib/constants';
 
 export default function AllocationsListPage() {
   const [allocations, setAllocations] = useState([]);
@@ -53,6 +57,13 @@ export default function AllocationsListPage() {
   const [viewMode, setViewMode] = useState('matrix'); // 'matrix' | 'schedule' | 'list'
   const [loading, setLoading] = useState(true);
 
+  // Filter States
+  const [searchQuery, setSearchQuery] = useState('');
+  const [roleFilter, setRoleFilter] = useState('all');
+  const [clientFilter, setClientFilter] = useState('all');
+  const [employeeFilter, setEmployeeFilter] = useState('all');
+  const [assignmentTypeFilter, setAssignmentTypeFilter] = useState('all');
+
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -61,9 +72,6 @@ export default function AllocationsListPage() {
   useEffect(() => {
     const unsubWeeks = subscribeWorkWeeks((data) => {
       setWeeks(data || []);
-      if (data && data.length > 0 && !selectedWeekId) {
-        setSelectedWeekId(data[0].id);
-      }
     });
 
     const unsubClients = subscribeClients(setClients);
@@ -84,14 +92,39 @@ export default function AllocationsListPage() {
       if (unsubSurplus) unsubSurplus();
       if (unsubAvail) unsubAvail();
     };
-  }, [selectedWeekId]);
+  }, []);
 
-  const filteredAllocations = selectedWeekId
-    ? allocations.filter((a) => a.weekId === selectedWeekId)
+  const weekAllocations = selectedWeekId && selectedWeekId !== 'all'
+    ? allocations.filter((a) => a.weekId === selectedWeekId || a.weekName === selectedWeekId)
     : allocations;
+
+  const filteredAllocations = weekAllocations.filter((a) => {
+    if (clientFilter !== 'all' && a.clientId !== clientFilter) return false;
+    if (employeeFilter !== 'all' && a.employeeId !== employeeFilter && a.employeeCode !== employeeFilter) return false;
+    if (roleFilter !== 'all' && (a.employeeRole || '').toLowerCase() !== roleFilter.toLowerCase()) return false;
+    if (assignmentTypeFilter !== 'all' && a.assignmentType !== assignmentTypeFilter) return false;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const matchClient = (a.clientName || '').toLowerCase().includes(q) || (a.clientId || '').toLowerCase().includes(q);
+      const matchEmp = (a.employeeName || '').toLowerCase().includes(q) || (a.employeeCode || '').toLowerCase().includes(q);
+      if (!matchClient && !matchEmp) return false;
+    }
+    return true;
+  });
 
   const currentWeek = weeks.find((w) => w.id === selectedWeekId) || weeks[0];
   const currentSurplus = surplusList.filter((s) => s.weekId === selectedWeekId);
+
+  const hasActiveFilters = searchQuery || roleFilter !== 'all' || clientFilter !== 'all' || employeeFilter !== 'all' || assignmentTypeFilter !== 'all' || (selectedWeekId && selectedWeekId !== 'all');
+
+  const resetFilters = () => {
+    setSearchQuery('');
+    setRoleFilter('all');
+    setClientFilter('all');
+    setEmployeeFilter('all');
+    setAssignmentTypeFilter('all');
+    setSelectedWeekId('all');
+  };
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
@@ -133,12 +166,15 @@ export default function AllocationsListPage() {
             </span>
             <div className="w-60">
               <Select
-                value={selectedWeekId}
+                value={selectedWeekId || 'all'}
                 onChange={(e) => setSelectedWeekId(e.target.value)}
-                options={weeks.map((w) => ({
-                  value: w.id,
-                  label: `${w.name} (${w.startDate})`,
-                }))}
+                options={[
+                  { value: 'all', label: 'All Work Weeks' },
+                  ...weeks.map((w) => ({
+                    value: w.id,
+                    label: `${w.name} (${w.startDate})`,
+                  })),
+                ]}
               />
             </div>
 
@@ -198,6 +234,91 @@ export default function AllocationsListPage() {
           </div>
         </div>
 
+        {/* Extended Interactive Filter Bar */}
+        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+          <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
+            {/* Search Input */}
+            <div className="relative flex-1 min-w-[220px]">
+              <Input
+                placeholder="Search by client or staff name/code..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                icon={Search}
+              />
+            </div>
+
+            {/* Filter Selects Grid */}
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className="w-40">
+                <Select
+                  value={roleFilter}
+                  onChange={(e) => setRoleFilter(e.target.value)}
+                  options={[
+                    { value: 'all', label: 'All Roles' },
+                    ...ROLE_OPTIONS,
+                  ]}
+                />
+              </div>
+
+              <div className="w-48">
+                <Select
+                  value={clientFilter}
+                  onChange={(e) => setClientFilter(e.target.value)}
+                  options={[
+                    { value: 'all', label: 'All Clients' },
+                    ...clients.map((c) => ({ value: c.id, label: c.name })),
+                  ]}
+                />
+              </div>
+
+              <div className="w-44">
+                <Select
+                  value={employeeFilter}
+                  onChange={(e) => setEmployeeFilter(e.target.value)}
+                  options={[
+                    { value: 'all', label: 'All Staff' },
+                    ...employees.map((emp) => ({ value: emp.id, label: `${emp.name} (${emp.employeeCode || emp.role})` })),
+                  ]}
+                />
+              </div>
+
+              <div className="w-36">
+                <Select
+                  value={assignmentTypeFilter}
+                  onChange={(e) => setAssignmentTypeFilter(e.target.value)}
+                  options={[
+                    { value: 'all', label: 'All Types' },
+                    { value: 'automatic', label: 'Auto' },
+                    { value: 'manual', label: 'Manual' },
+                  ]}
+                />
+              </div>
+
+              {hasActiveFilters && (
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="px-3 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-200 rounded-xl flex items-center gap-1.5 transition-all"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Reset</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200">
+            <span className="font-extrabold text-slate-700">
+              Showing {filteredAllocations.length} of {weekAllocations.length} allocations for {currentWeek?.name || 'Selected Week'}
+            </span>
+            {hasActiveFilters && (
+              <span className="text-indigo-700 font-bold bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                Filters Applied
+              </span>
+            )}
+          </div>
+        </div>
+
         {/* Surplus Alert if unassigned items exist */}
         {currentSurplus.filter((s) => s.status !== 'assigned').length > 0 && (
           <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-950">
@@ -242,6 +363,10 @@ export default function AllocationsListPage() {
               clients={clients}
               employees={employees}
               allocations={filteredAllocations}
+              searchQuery={searchQuery}
+              clientFilter={clientFilter}
+              employeeFilter={employeeFilter}
+              roleFilter={roleFilter}
             />
           </div>
         ) : viewMode === 'schedule' ? (
@@ -267,6 +392,9 @@ export default function AllocationsListPage() {
               workWeek={currentWeek}
               employees={employees}
               clients={clients}
+              employeeFilter={employeeFilter}
+              roleFilter={roleFilter}
+              searchQuery={searchQuery}
             />
           </div>
         ) : (

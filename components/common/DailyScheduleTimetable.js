@@ -10,8 +10,32 @@ export default function DailyScheduleTimetable({
   workWeek,
   employees = [],
   clients = [],
+  employeeFilter = 'all',
+  roleFilter = 'all',
+  searchQuery = '',
 }) {
-  const staffIds = Object.keys(dailySchedules);
+  let staffIds = Object.keys(dailySchedules);
+
+  if (employeeFilter !== 'all') {
+    staffIds = staffIds.filter((id) => id === employeeFilter || dailySchedules[id]?.employeeCode === employeeFilter);
+  }
+
+  if (roleFilter !== 'all') {
+    staffIds = staffIds.filter((id) => (dailySchedules[id]?.employeeRole || '').toLowerCase() === roleFilter.toLowerCase());
+  }
+
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    staffIds = staffIds.filter((id) => {
+      const s = dailySchedules[id];
+      const matchStaff = (s?.employeeName || '').toLowerCase().includes(q) || (s?.employeeCode || '').toLowerCase().includes(q);
+      if (matchStaff) return true;
+      // Check if any client task on any day matches
+      return Object.values(s?.days || {}).some(day =>
+        (day.clientTasks || []).some(ct => (ct.clientName || '').toLowerCase().includes(q))
+      );
+    });
+  }
 
   // Extract all distinct dates in chronological order
   const allDatesSet = new Set();
