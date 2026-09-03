@@ -2,7 +2,8 @@ import { getClients } from './clientService';
 import { getEmployees } from './employeeService';
 import { getWorkWeeks } from './weekService';
 import { getCapacityRules } from './capacityService';
-import { getWorkRequirements } from './requirementService';
+import { getEmployeeAvailability } from './availabilityService';
+import { fetchCollection } from '@/lib/storageSync';
 import { ROLES, CONTENT_TYPES } from '@/lib/constants';
 import {
   calculateDailyEmployeeCapacity,
@@ -11,9 +12,6 @@ import {
   calculateUtilization,
   convertTaskToCapacityUnits
 } from '@/lib/capacityCalculator';
-import { getEmployeeAvailability } from './availabilityService';
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
 
 const DEFAULT_DASHBOARD_DATA = {
   activeWeek: null,
@@ -48,7 +46,7 @@ const DEFAULT_DASHBOARD_DATA = {
   employees: [],
 };
 
-export async function getDashboardData() {
+export async function getDashboardData(targetWeekId = null) {
   try {
     const [
       clients,
@@ -56,16 +54,16 @@ export async function getDashboardData() {
       weeks,
       capacityRules,
       availabilityList,
-      allocationsSnap,
-      surplusSnap
+      allocations,
+      surplusList
     ] = await Promise.all([
       getClients().catch(() => []),
       getEmployees().catch(() => []),
       getWorkWeeks().catch(() => []),
       getCapacityRules().catch(() => []),
       getEmployeeAvailability().catch(() => []),
-      getDocs(collection(db, 'allocations')).catch(() => ({ docs: [] })),
-      getDocs(collection(db, 'surplusWork')).catch(() => ({ docs: [] })),
+      fetchCollection('allocations').catch(() => []),
+      fetchCollection('surplusWork').catch(() => []),
     ]);
 
     const activeClients = (clients || []).filter(c => c.status !== 'inactive');
@@ -73,16 +71,24 @@ export async function getDashboardData() {
     const graphicDesigners = activeEmployees.filter(e => e.role === ROLES.GRAPHIC_DESIGNER);
     const videoEditors = activeEmployees.filter(e => e.role === ROLES.VIDEO_EDITOR);
 
-    const allocations = (allocationsSnap?.docs || []).map(d => ({ id: d.id, ...d.data() }));
-    const surplusList = (surplusSnap?.docs || []).map(d => ({ id: d.id, ...d.data() }));
-
-    // Find current active week or first week
-    const activeWeek = (weeks || []).find(w => w.status === 'active') || (weeks || [])[0] || null;
+    // Find requested target week, active week, or first available week
+    let activeWeek = null;
+    if (targetWeekId && targetWeekId !== 'all') {
+      activeWeek = (weeks || []).find(w => w.id === targetWeekId) || null;
+    }
+    if (!activeWeek) {
+      activeWeek = (weeks || []).find(w => w.status === 'active') || (weeks || [])[0] || null;
+    }
 
     let graphicTeamTotalCap = 0;
     let graphicTeamUsedCap = 0;
     let videoTeamTotalCap = 0;
     let videoTeamUsedCap = 0;
+
+    // Filter allocations for the active week
+    const weekAllocations = activeWeek
+      ? (allocations || []).filter(a => a.weekId === activeWeek.id || a.weekName === activeWeek.name)
+      : (allocations || []);
 
     if (activeWeek) {
       const { effectiveWorkingDates } = getEffectiveWorkingDays(activeWeek, activeWeek.holidays || []);
@@ -100,12 +106,14 @@ export async function getDashboardData() {
       });
 
       // Calculate used capacity for this week's allocations
-      const weekAllocations = allocations.filter(a => a.weekId === activeWeek.id);
       weekAllocations.forEach(a => {
-        if (a.employeeRole === ROLES.GRAPHIC_DESIGNER) {
-          graphicTeamUsedCap += (Number(a.capacityUsed) || 0);
-        } else if (a.employeeRole === ROLES.VIDEO_EDITOR) {
-          videoTeamUsedCap += (Number(a.capacityUsed) || 0);
+        const used = Number(a.capacityUsed) || 0;
+        const role = a.employeeRole || (employees.find(e => e.id === a.employeeId)?.role);
+
+        if (role === ROLES.GRAPHIC_DESIGNER) {
+          graphicTeamUsedCap += used;
+        } else if (role === ROLES.VIDEO_EDITOR) {
+          videoTeamUsedCap += used;
         }
       });
     }
@@ -113,19 +121,49 @@ export async function getDashboardData() {
     const graphicTeamUtilization = calculateUtilization(graphicTeamUsedCap, graphicTeamTotalCap);
     const videoTeamUtilization = calculateUtilization(videoTeamUsedCap, videoTeamTotalCap);
 
-    // Sum allocated items
+    // Sum allocated items for the active week
     let totalAllocatedPosts = 0;
     let totalAllocatedReels = 0;
     let totalAllocatedStories = 0;
-    allocations.forEach(a => {
+    weekAllocations.forEach(a => {
       totalAllocatedPosts += (Number(a.work?.posts) || 0);
       totalAllocatedReels += (Number(a.work?.reels) || 0);
       totalAllocatedStories += (Number(a.work?.stories) || 0);
     });
 
-    // Sum surplus items
-    const unassignedSurplus = surplusList.filter(s => s.status !== 'assigned');
+    // Sum surplus items for the active week
+    const weekSurplusList = activeWeek
+      ? (surplusList || []).filter(s => s.weekId === activeWeek.id)
+      : (surplusList || []);
+    const unassignedSurplus = weekSurplusList.filter(s => s.status !== 'assigned');
     const totalSurplusCount = unassignedSurplus.reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
+
+    // Calculate per-employee live capacity stats for this week
+    const employeeWorkloads = activeEmployees.map(emp => {
+      const empAlloc = weekAllocations.filter(a => a.employeeId === emp.id);
+      const usedUnits = empAlloc.reduce((sum, a) => sum + (Number(a.capacityUsed) || 0), 0);
+      const postsCount = empAlloc.reduce((sum, a) => sum + (Number(a.work?.posts) || 0), 0);
+      const reelsCount = empAlloc.reduce((sum, a) => sum + (Number(a.work?.reels) || 0), 0);
+      const storiesCount = empAlloc.reduce((sum, a) => sum + (Number(a.work?.stories) || 0), 0);
+
+      const effectiveDates = activeWeek
+        ? getEffectiveWorkingDays(activeWeek, activeWeek.holidays || []).effectiveWorkingDates
+        : [];
+      const cap = calculateWeeklyEmployeeCapacity(emp, capacityRules || [], effectiveDates, availabilityList || []);
+      const totalUnits = cap.weeklyCapacityUnits;
+      const utilization = calculateUtilization(usedUnits, totalUnits);
+
+      return {
+        ...emp,
+        usedUnits,
+        totalUnits,
+        utilization,
+        postsCount,
+        reelsCount,
+        storiesCount,
+        allocationCount: empAlloc.length,
+      };
+    });
 
     // Upcoming holidays from all weeks
     const allHolidays = [];
@@ -170,7 +208,7 @@ export async function getDashboardData() {
       },
       recentSurplus: unassignedSurplus.slice(0, 5),
       upcomingHolidays: allHolidays.slice(0, 5),
-      employees: activeEmployees,
+      employees: employeeWorkloads,
     };
   } catch (err) {
     console.error('Error fetching dashboard data:', err);

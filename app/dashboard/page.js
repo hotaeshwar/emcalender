@@ -7,10 +7,15 @@ import Button from '@/components/common/Button';
 import Badge from '@/components/common/Badge';
 import ProgressBar from '@/components/common/ProgressBar';
 import DownloadExcelButton from '@/components/common/DownloadExcelButton';
+import Select from '@/components/common/Select';
 import { SkeletonCard, SkeletonTable } from '@/components/common/LoadingSkeleton';
 import EmptyState from '@/components/common/EmptyState';
 import { getDashboardData } from '@/services/dashboardService';
 import { seedDefaultCapacityRules } from '@/services/capacityService';
+import { subscribeAllocations, subscribeSurplusWork } from '@/services/allocationService';
+import { subscribeWorkWeeks } from '@/services/weekService';
+import { subscribeEmployees } from '@/services/employeeService';
+import { subscribeClients } from '@/services/clientService';
 import { useToast } from '@/contexts/ToastContext';
 import { exportAllocationReport, exportToCSV } from '@/lib/exportExcel';
 import Link from 'next/link';
@@ -28,7 +33,10 @@ import {
   ShieldAlert,
   CalendarDays,
   FileSpreadsheet,
-  Download
+  Download,
+  Clock,
+  UserCheck,
+  RefreshCw
 } from 'lucide-react';
 import { ROLES, ROLE_LABELS } from '@/lib/constants';
 
@@ -59,16 +67,20 @@ const INITIAL_DATA = {
 
 export default function DashboardPage() {
   const [data, setData] = useState(INITIAL_DATA);
+  const [weeks, setWeeks] = useState([]);
+  const [selectedWeekId, setSelectedWeekId] = useState('');
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
   const { success, error } = useToast();
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (targetWeekId = null) => {
     try {
-      const res = await getDashboardData();
+      const res = await getDashboardData(targetWeekId || selectedWeekId);
       if (res) {
         setData(res);
+        if (!selectedWeekId && res.activeWeek) {
+          setSelectedWeekId(res.activeWeek.id);
+        }
       }
     } catch (err) {
       console.error('Error loading dashboard:', err);
@@ -78,15 +90,47 @@ export default function DashboardPage() {
   };
 
   useEffect(() => {
-    loadData();
-  }, []);
+    // Initial fetch
+    loadData(selectedWeekId);
+
+    // Setup real-time listeners for live synchronization
+    const unsubWeeks = subscribeWorkWeeks((wks) => {
+      setWeeks(wks || []);
+      loadData(selectedWeekId);
+    });
+    const unsubAllocations = subscribeAllocations(() => {
+      loadData(selectedWeekId);
+    });
+    const unsubSurplus = subscribeSurplusWork(() => {
+      loadData(selectedWeekId);
+    });
+    const unsubEmployees = subscribeEmployees(() => {
+      loadData(selectedWeekId);
+    });
+    const unsubClients = subscribeClients(() => {
+      loadData(selectedWeekId);
+    });
+
+    return () => {
+      if (unsubWeeks) unsubWeeks();
+      if (unsubAllocations) unsubAllocations();
+      if (unsubSurplus) unsubSurplus();
+      if (unsubEmployees) unsubEmployees();
+      if (unsubClients) unsubClients();
+    };
+  }, [selectedWeekId]);
+
+  const handleWeekChange = (newWeekId) => {
+    setSelectedWeekId(newWeekId);
+    loadData(newWeekId);
+  };
 
   const handleSeedRules = async () => {
     setSeeding(true);
     try {
       await seedDefaultCapacityRules();
       success('Default capacity rules have been seeded successfully!', 'Rules Initialized');
-      loadData();
+      loadData(selectedWeekId);
     } catch (err) {
       console.error(err);
       error('Failed to seed capacity rules.', 'Error');
@@ -123,8 +167,8 @@ export default function DashboardPage() {
       subtitle="Real-time capacity tracking, team utilization, and work distribution metrics"
     >
       <div className="space-y-6 animate-fade-in bg-white">
-        {/* Top Clean White Banner */}
-        <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm relative overflow-hidden flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+        {/* Top Clean White Banner with Week Selector */}
+        <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm relative overflow-hidden flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
           <div className="space-y-2 z-10 max-w-xl">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 text-indigo-800 text-xs font-bold border border-indigo-200">
               <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
@@ -135,32 +179,37 @@ export default function DashboardPage() {
             </h2>
             <p className="text-sm text-slate-700 font-medium leading-relaxed">
               {data?.activeWeek
-                ? `Currently viewing active allocation plan for ${data.activeWeek.name} (${data.activeWeek.startDate} to ${data.activeWeek.endDate}) with ${data.activeWeek.calculatedWorkingDays || 5} effective working days.`
+                ? `Viewing capacity metrics for ${data.activeWeek.name} (${data.activeWeek.startDate} to ${data.activeWeek.endDate}) with ${data.activeWeek.calculatedWorkingDays || 5} effective working days.`
                 : 'Start by setting up your work weeks, client requirements, and capacity rules.'}
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 z-10">
-            <DownloadExcelButton
-              onExport={handleExportSummaryExcel}
-              label="Download Summary (Excel)"
-              size="md"
-            />
-            <Link href="/allocations/new">
-              <Button variant="primary" size="md" icon={Sparkles} className="bg-slate-900 hover:bg-slate-800 text-white font-bold shadow-sm">
-                Auto Allocate Work
-              </Button>
-            </Link>
-            <Button
-              variant="secondary"
-              size="md"
-              onClick={handleSeedRules}
-              isLoading={seeding}
-              icon={Sliders}
-              className="bg-white text-slate-800 border-slate-300 hover:bg-slate-50 font-bold"
-            >
-              Reset Default Rules
-            </Button>
+          <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3 z-10 w-full lg:w-auto">
+            {/* Week Selector */}
+            <div className="w-full sm:w-60">
+              <Select
+                label="Target Work Week"
+                value={selectedWeekId || data?.activeWeek?.id || ''}
+                onChange={(e) => handleWeekChange(e.target.value)}
+                options={weeks.map((w) => ({
+                  value: w.id,
+                  label: `${w.name} (${w.startDate})`,
+                }))}
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 sm:pt-5">
+              <DownloadExcelButton
+                onExport={handleExportSummaryExcel}
+                label="Download Summary"
+                size="md"
+              />
+              <Link href="/allocations/new">
+                <Button variant="primary" size="md" icon={Sparkles} className="bg-slate-900 hover:bg-slate-800 text-white font-bold shadow-sm">
+                  Auto Allocate Work
+                </Button>
+              </Link>
+            </div>
           </div>
         </div>
 
@@ -371,6 +420,77 @@ export default function DashboardPage() {
             </div>
           </Card>
         </div>
+
+        {/* Individual Staff Workload & Utilization for Selected Week */}
+        <Card>
+          <CardHeader
+            title={`Individual Staff Workload & Capacity (${data?.activeWeek?.name || 'Active Week'})`}
+            subtitle="Live deliverable counts and capacity unit utilization for each team member"
+            action={
+              <Link href="/employees">
+                <Button variant="ghost" size="sm" className="font-bold text-slate-700">
+                  Manage Staff →
+                </Button>
+              </Link>
+            }
+          />
+
+          {data?.employees && data.employees.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {data.employees.map((emp) => {
+                const isOverloaded = emp.utilization > 100;
+                return (
+                  <div
+                    key={emp.id}
+                    className="p-4 rounded-2xl border border-slate-200 bg-slate-50/70 hover:bg-slate-50 transition-all space-y-3"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <h4 className="text-sm font-extrabold text-slate-900">
+                          {emp.name}
+                        </h4>
+                        <p className="text-[11px] font-bold text-slate-500">
+                          {emp.employeeCode || 'Staff'} • {ROLE_LABELS[emp.role] || emp.role}
+                        </p>
+                      </div>
+                      <Badge role={emp.role} size="sm" />
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200">
+                      <span className="text-slate-600 font-medium">Deliverables:</span>
+                      <span className="font-extrabold text-slate-900">
+                        {emp.postsCount > 0 && <span className="text-blue-700">{emp.postsCount}P </span>}
+                        {emp.reelsCount > 0 && <span className="text-purple-700">{emp.reelsCount}R </span>}
+                        {emp.storiesCount > 0 && <span className="text-amber-700">{emp.storiesCount}S</span>}
+                        {emp.postsCount === 0 && emp.reelsCount === 0 && emp.storiesCount === 0 && (
+                          <span className="text-slate-400">0 Items</span>
+                        )}
+                      </span>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-xs font-bold">
+                        <span className="text-slate-700">Capacity Used:</span>
+                        <span className={isOverloaded ? 'text-rose-600' : 'text-slate-900'}>
+                          {emp.usedUnits} / {emp.totalUnits} Units ({emp.utilization}%)
+                        </span>
+                      </div>
+                      <ProgressBar
+                        percentage={emp.utilization}
+                        showLabel={false}
+                        size="sm"
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="py-6 text-center text-xs text-slate-500">
+              No active team members configured.
+            </div>
+          )}
+        </Card>
 
         {/* Bottom Section: Surplus Alerts & Upcoming Holidays */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

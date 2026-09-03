@@ -296,3 +296,44 @@ export async function deleteAllocation(id, adminId = 'admin') {
   });
   return { success: true };
 }
+
+export async function clearWeeklyAllocations({
+  weekId,
+  clearSurplus = true,
+  adminId = 'admin'
+}) {
+  const existingAlloc = await fetchCollection(ALLOCATIONS_COLLECTION);
+  let deletedAllocCount = 0;
+
+  for (const a of existingAlloc) {
+    if (!weekId || weekId === 'all' || a.weekId === weekId || a.weekName === weekId) {
+      await removeDocument(ALLOCATIONS_COLLECTION, a.id);
+      deletedAllocCount++;
+    }
+  }
+
+  let deletedSurplusCount = 0;
+  if (clearSurplus) {
+    const existingSurplus = await fetchCollection(SURPLUS_COLLECTION);
+    for (const s of existingSurplus) {
+      if (!weekId || weekId === 'all' || s.weekId === weekId || s.weekName === weekId) {
+        await removeDocument(SURPLUS_COLLECTION, s.id);
+        deletedSurplusCount++;
+      }
+    }
+  }
+
+  await logAuditAction({
+    action: 'ALLOCATIONS_CLEARED',
+    entityType: 'allocation',
+    entityId: weekId || 'all',
+    description: `Cleared ${deletedAllocCount} allocations and ${deletedSurplusCount} surplus records for week ${weekId || 'all'}`,
+    adminId,
+  });
+
+  return {
+    success: true,
+    deletedAllocCount,
+    deletedSurplusCount,
+  };
+}

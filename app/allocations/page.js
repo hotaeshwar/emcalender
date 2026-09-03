@@ -15,7 +15,8 @@ import DownloadExcelButton from '@/components/common/DownloadExcelButton';
 import { useToast } from '@/contexts/ToastContext';
 import {
   subscribeAllocations,
-  deleteAllocation
+  deleteAllocation,
+  clearWeeklyAllocations
 } from '@/services/allocationService';
 import { subscribeWorkWeeks } from '@/services/weekService';
 import { subscribeClients } from '@/services/clientService';
@@ -66,6 +67,10 @@ export default function AllocationsListPage() {
 
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Clear Table Modal State
+  const [isClearModalOpen, setIsClearModalOpen] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
 
   const { success, error } = useToast();
 
@@ -138,6 +143,24 @@ export default function AllocationsListPage() {
       error('Failed to delete allocation.');
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const handleClearAllocations = async () => {
+    setIsClearing(true);
+    try {
+      const res = await clearWeeklyAllocations({
+        weekId: selectedWeekId !== 'all' ? selectedWeekId : null,
+        clearSurplus: true,
+      });
+      const weekName = weeks.find((w) => w.id === selectedWeekId)?.name || 'All Weeks';
+      success(`Successfully cleared ${res.deletedAllocCount} allocations for ${weekName}!`, 'Table Cleared');
+      setIsClearModalOpen(false);
+    } catch (err) {
+      console.error(err);
+      error('Failed to clear allocations.');
+    } finally {
+      setIsClearing(false);
     }
   };
 
@@ -219,7 +242,18 @@ export default function AllocationsListPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={Trash2}
+              onClick={() => setIsClearModalOpen(true)}
+              disabled={filteredAllocations.length === 0}
+              className="text-rose-600 hover:text-rose-800 hover:bg-rose-50 border-rose-200 font-bold"
+            >
+              Clear Table
+            </Button>
+
             <DownloadExcelButton
               onExport={handleExportExcel}
               label="Download Matrix (Excel)"
@@ -509,11 +543,22 @@ export default function AllocationsListPage() {
         isOpen={Boolean(deleteTarget)}
         onClose={() => !isDeleting && setDeleteTarget(null)}
         onConfirm={handleDelete}
-        title="Delete Allocation Record"
-        message={`Are you sure you want to delete this allocation for ${deleteTarget?.employeeName}?`}
+        title="Delete Allocation Assignment"
+        message="Are you sure you want to delete this specific allocation record?"
         confirmText="Delete Record"
-        variant="danger"
         isLoading={isDeleting}
+      />
+
+      {/* Clear All Allocations Confirmation Modal */}
+      <ConfirmModal
+        isOpen={isClearModalOpen}
+        onClose={() => !isClearing && setIsClearModalOpen(false)}
+        onConfirm={handleClearAllocations}
+        title={selectedWeekId && selectedWeekId !== 'all' ? `Clear Allocations for ${currentWeek?.name || 'Selected Week'}` : 'Clear All Allocations'}
+        message={`Are you sure you want to completely clear the allocation table${selectedWeekId && selectedWeekId !== 'all' ? ` for ${currentWeek?.name}` : ' across all weeks'}? This will delete all committed staff assignments and surplus items for this period, allowing you to auto-allocate fresh.`}
+        confirmText="Clear Allocations"
+        variant="danger"
+        isLoading={isClearing}
       />
     </AppLayout>
   );
