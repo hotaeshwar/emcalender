@@ -19,10 +19,12 @@ import {
   createWorkRequirement,
   updateWorkRequirement,
   deleteWorkRequirement,
-  copyRequirementsBetweenWeeks
+  copyRequirementsBetweenWeeks,
+  copyRequirementsBetweenMonths
 } from '@/services/requirementService';
 import { subscribeClients } from '@/services/clientService';
 import { subscribeWorkWeeks } from '@/services/weekService';
+import { groupWeeksByMonth, getActiveMonth } from '@/lib/monthUtils';
 import {
   ClipboardList,
   Plus,
@@ -32,15 +34,19 @@ import {
   Copy,
   Sparkles,
   Calendar,
-  Building2
+  Building2,
+  Layers,
+  RotateCcw
 } from 'lucide-react';
 
 export default function RequirementsPage() {
   const [requirements, setRequirements] = useState([]);
   const [clients, setClients] = useState([]);
   const [weeks, setWeeks] = useState([]);
+  const [months, setMonths] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const [selectedMonthFilter, setSelectedMonthFilter] = useState('all');
   const [selectedWeekFilter, setSelectedWeekFilter] = useState('all');
   const [clientFilter, setClientFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -66,9 +72,12 @@ export default function RequirementsPage() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Copy Week Modal State
+  // Copy Week / Month Modal State
   const [isCopyModalOpen, setIsCopyModalOpen] = useState(false);
+  const [copyMode, setCopyMode] = useState('month'); // 'month' | 'week'
   const [copyData, setCopyData] = useState({
+    sourceMonthKey: '',
+    targetMonthKey: '',
     sourceWeekId: '',
     targetWeekId: '',
     overwrite: true,
@@ -80,14 +89,17 @@ export default function RequirementsPage() {
   useEffect(() => {
     const unsubClients = subscribeClients(setClients);
     const unsubWeeks = subscribeWorkWeeks((data) => {
-      setWeeks(data);
-      if (data.length > 0 && selectedWeekFilter === 'all') {
-        setSelectedWeekFilter(data[0].id);
+      setWeeks(data || []);
+      const grouped = groupWeeksByMonth(data || []);
+      setMonths(grouped);
+      const activeM = getActiveMonth(data || []);
+      if (activeM && selectedMonthFilter === 'all') {
+        setSelectedMonthFilter(activeM.monthKey);
       }
     });
 
     const unsubReqs = subscribeWorkRequirements((data) => {
-      setRequirements(data);
+      setRequirements(data || []);
       setLoading(false);
     });
 
@@ -98,19 +110,15 @@ export default function RequirementsPage() {
     };
   }, []);
 
+  const currentMonthData = months.find((m) => m.monthKey === selectedMonthFilter) || months[0];
+  const monthWeeks = currentMonthData?.weeks || weeks;
+
   const openCreateModal = () => {
     setEditingReq(null);
-    const defaultWeek = selectedWeekFilter !== 'all' ? selectedWeekFilter : (weeks[0]?.id || '');
-    const defaultClient = clientFilter !== 'all' ? clientFilter : (clients[0]?.id || '');
-
     setFormData({
-      clientId: defaultClient,
-      weekId: defaultWeek,
-      requirements: {
-        posts: 0,
-        reels: 0,
-        stories: 0,
-      },
+      clientId: clients[0]?.id || '',
+      weekId: selectedWeekFilter !== 'all' ? selectedWeekFilter : (monthWeeks[0]?.id || weeks[0]?.id || ''),
+      requirements: { posts: 2, reels: 1, stories: 1 },
       notes: '',
       status: 'submitted',
     });
@@ -124,9 +132,9 @@ export default function RequirementsPage() {
       clientId: req.clientId,
       weekId: req.weekId,
       requirements: {
-        posts: Number(req.requirements?.posts) || 0,
-        reels: Number(req.requirements?.reels) || 0,
-        stories: Number(req.requirements?.stories) || 0,
+        posts: req.requirements?.posts || 0,
+        reels: req.requirements?.reels || 0,
+        stories: req.requirements?.stories || 0,
       },
       notes: req.notes || '',
       status: req.status || 'submitted',
@@ -143,27 +151,26 @@ export default function RequirementsPage() {
       return;
     }
 
-    setErrors({});
     setIsSaving(true);
-
     try {
-      const clientObj = clients.find((c) => c.id === formData.clientId);
+      const client = clients.find((c) => c.id === formData.clientId);
       const payload = {
         ...formData,
-        clientName: clientObj?.name || '',
+        clientName: client?.name || '',
       };
 
       if (editingReq) {
         await updateWorkRequirement(editingReq.id, payload);
-        success(`Updated deliverables for ${payload.clientName}.`);
+        success('Requirements updated successfully.');
       } else {
         await createWorkRequirement(payload);
-        success(`Added work requirement for ${payload.clientName}.`);
+        success('Requirements added successfully.');
       }
+
       setIsModalOpen(false);
     } catch (err) {
       console.error(err);
-      error('Failed to save requirements.');
+      error(err.message || 'Failed to save requirement.');
     } finally {
       setIsSaving(false);
     }
@@ -186,37 +193,62 @@ export default function RequirementsPage() {
     }
   };
 
-  const openCopyModal = (prefilledSourceId = null) => {
-    const src = prefilledSourceId || (selectedWeekFilter !== 'all' ? selectedWeekFilter : (weeks[0]?.id || ''));
-    const remainingWeeks = weeks.filter((w) => w.id !== src);
-    const target = remainingWeeks[0]?.id || '';
+  const openCopyModal = () => {
+    const srcM = selectedMonthFilter !== 'all' ? selectedMonthFilter : (months[0]?.monthKey || '');
+    const remMonths = months.filter((m) => m.monthKey !== srcM);
+    const targetM = remMonths[0]?.monthKey || '';
+
+    const srcW = selectedWeekFilter !== 'all' ? selectedWeekFilter : (monthWeeks[0]?.id || weeks[0]?.id || '');
+    const remWeeks = weeks.filter((w) => w.id !== srcW);
+    const targetW = remWeeks[0]?.id || '';
 
     setCopyData({
-      sourceWeekId: src,
-      targetWeekId: target,
+      sourceMonthKey: srcM,
+      targetMonthKey: targetM,
+      sourceWeekId: srcW,
+      targetWeekId: targetW,
       overwrite: true,
     });
+    setCopyMode(selectedWeekFilter !== 'all' ? 'week' : 'month');
     setIsCopyModalOpen(true);
   };
 
   const handleCopy = async (e) => {
     e.preventDefault();
-    if (!copyData.sourceWeekId || !copyData.targetWeekId) {
-      error('Please select both a Source Week and Target Week.');
-      return;
-    }
-    if (copyData.sourceWeekId === copyData.targetWeekId) {
-      error('Source Week and Target Week must be different.');
-      return;
-    }
-
     setIsCopying(true);
     try {
-      const res = await copyRequirementsBetweenWeeks(copyData);
-      const targetWk = weeks.find((w) => w.id === copyData.targetWeekId);
-      success(`Successfully copied ${res.copiedCount} client deliverables to ${targetWk?.name || 'Target Week'}!`, 'Week Copied');
+      if (copyMode === 'month') {
+        if (!copyData.sourceMonthKey || !copyData.targetMonthKey) {
+          error('Please select both a Source Month and Target Month.');
+          return;
+        }
+        if (copyData.sourceMonthKey === copyData.targetMonthKey) {
+          error('Source Month and Target Month must be different.');
+          return;
+        }
+        const res = await copyRequirementsBetweenMonths({
+          sourceMonthKey: copyData.sourceMonthKey,
+          targetMonthKey: copyData.targetMonthKey,
+          overwrite: copyData.overwrite,
+        });
+        const targetMLabel = months.find((m) => m.monthKey === copyData.targetMonthKey)?.monthLabel || copyData.targetMonthKey;
+        success(`Successfully copied ${res.copiedCount} client deliverables to ${targetMLabel}!`, 'Month Copied');
+        setSelectedMonthFilter(copyData.targetMonthKey);
+      } else {
+        if (!copyData.sourceWeekId || !copyData.targetWeekId) {
+          error('Please select both a Source Week and Target Week.');
+          return;
+        }
+        if (copyData.sourceWeekId === copyData.targetWeekId) {
+          error('Source Week and Target Week must be different.');
+          return;
+        }
+        const res = await copyRequirementsBetweenWeeks(copyData);
+        const targetWk = weeks.find((w) => w.id === copyData.targetWeekId);
+        success(`Successfully copied ${res.copiedCount} client deliverables to ${targetWk?.name || 'Target Week'}!`, 'Week Copied');
+        setSelectedWeekFilter(copyData.targetWeekId);
+      }
       setIsCopyModalOpen(false);
-      setSelectedWeekFilter(copyData.targetWeekId);
     } catch (err) {
       console.error(err);
       error(err.message || 'Failed to copy requirements.');
@@ -226,6 +258,10 @@ export default function RequirementsPage() {
   };
 
   const filteredRequirements = requirements.filter((r) => {
+    if (selectedMonthFilter !== 'all') {
+      const matchMonth = monthWeeks.some((w) => w.id === r.weekId) || r.monthKey === selectedMonthFilter;
+      if (!matchMonth) return false;
+    }
     if (selectedWeekFilter !== 'all' && r.weekId !== selectedWeekFilter) return false;
     if (clientFilter !== 'all' && r.clientId !== clientFilter) return false;
     if (searchQuery) {
@@ -240,35 +276,38 @@ export default function RequirementsPage() {
   return (
     <AppLayout
       title="Client Work Requirements"
-      subtitle="Define weekly deliverables (Posts, Reels, Stories) requested by clients"
+      subtitle="Define Month-Wise and Week-Wise deliverables (Posts, Reels, Stories) requested by clients"
     >
       <div className="space-y-6 bg-white">
         {/* Controls Bar */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-4 rounded-2xl bg-white border border-slate-200 shadow-sm">
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Filter by Week:
+              Filter by Month:
             </span>
-            <div className="w-64">
+            <div className="w-56">
               <Select
-                value={selectedWeekFilter}
-                onChange={(e) => setSelectedWeekFilter(e.target.value)}
+                value={selectedMonthFilter}
+                onChange={(e) => {
+                  setSelectedMonthFilter(e.target.value);
+                  setSelectedWeekFilter('all');
+                }}
                 options={[
-                  { value: 'all', label: 'All Weeks' },
-                  ...weeks.map((w) => ({ value: w.id, label: `${w.name} (${w.startDate})` })),
+                  { value: 'all', label: 'All Months' },
+                  ...months.map((m) => ({ value: m.monthKey, label: `${m.monthLabel} (${m.weeks.length} Wks)` })),
                 ]}
               />
             </div>
 
-            {/* Quick Copy Action from selected week */}
+            {/* Quick Copy Action */}
             <Button
               variant="secondary"
               icon={Copy}
-              onClick={() => openCopyModal(selectedWeekFilter !== 'all' ? selectedWeekFilter : null)}
-              disabled={weeks.length < 2 || requirements.length === 0}
+              onClick={openCopyModal}
+              disabled={months.length < 2 && weeks.length < 2}
               className="text-slate-700 hover:text-slate-900 border-slate-300 font-semibold"
             >
-              Copy Week Requirements
+              Copy Requirements
             </Button>
           </div>
 
@@ -282,6 +321,39 @@ export default function RequirementsPage() {
             Add Work Requirement
           </Button>
         </div>
+
+        {/* Week Tabs Sub-Selector */}
+        {selectedMonthFilter !== 'all' && monthWeeks.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 p-2 bg-slate-50 border border-slate-200 rounded-2xl">
+            <button
+              type="button"
+              onClick={() => setSelectedWeekFilter('all')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all ${
+                selectedWeekFilter === 'all'
+                  ? 'bg-slate-900 text-white shadow-sm'
+                  : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-200'
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>Full {currentMonthData?.monthLabel || 'Month'} Combined</span>
+            </button>
+
+            {monthWeeks.map((w) => (
+              <button
+                key={w.id}
+                type="button"
+                onClick={() => setSelectedWeekFilter(w.id)}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all ${
+                  selectedWeekFilter === w.id
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'bg-white text-slate-700 border border-slate-200 hover:bg-indigo-50 hover:text-indigo-900'
+                }`}
+              >
+                {w.name} ({w.startDate})
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Filter Bar */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-4 rounded-2xl bg-slate-50 border border-slate-200">
@@ -315,126 +387,92 @@ export default function RequirementsPage() {
                 }}
                 className="px-3 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-200 rounded-xl flex items-center gap-1.5 transition-all"
               >
-                Reset
+                <RotateCcw className="w-3 h-3" />
+                <span>Reset</span>
               </button>
             )}
           </div>
 
-          <div className="text-xs font-extrabold text-slate-700 bg-white px-3 py-1.5 rounded-xl border border-slate-200">
-            Showing {filteredRequirements.length} of {requirements.length} Requirements
+          <div className="text-xs font-semibold text-slate-500">
+            Showing <span className="font-extrabold text-slate-900">{filteredRequirements.length}</span> deliverables
           </div>
         </div>
 
-        {/* Warning if No Masters */}
-        {(clients.length === 0 || weeks.length === 0) && !loading && (
-          <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-center gap-3">
-            <span>
-              <strong>Setup Required:</strong> You need at least 1 active Client and 1 Work Week before adding requirements.
-            </span>
-          </div>
-        )}
-
         {/* Requirements Table */}
-        {loading ? (
-          <SkeletonTable rows={5} cols={6} />
-        ) : filteredRequirements.length === 0 ? (
-          <EmptyState
-            icon={ClipboardList}
-            title={searchQuery || clientFilter !== 'all' || selectedWeekFilter !== 'all' ? 'No Matching Requirements' : 'No Requirements Entered'}
-            description={
-              searchQuery || clientFilter !== 'all' || selectedWeekFilter !== 'all'
-                ? 'Try resetting the search query or week/client filters.'
-                : 'Add deliverable requirements for your clients for this week.'
-            }
-            actionLabel={searchQuery || clientFilter !== 'all' ? 'Clear Filters' : 'Add Requirement'}
-            onAction={() => {
-              if (searchQuery || clientFilter !== 'all') {
-                setSearchQuery('');
-                setClientFilter('all');
-              } else {
-                openCreateModal();
-              }
-            }}
+        <Card>
+          <CardHeader
+            title={`Client Deliverable Requirements (${filteredRequirements.length})`}
+            subtitle={`Configured deliverables for ${selectedMonthFilter !== 'all' ? currentMonthData?.monthLabel : 'All Months'}`}
           />
-        ) : (
-          <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+
+          {loading ? (
+            <SkeletonTable rows={5} columns={6} />
+          ) : filteredRequirements.length === 0 ? (
+            <EmptyState
+              icon={ClipboardList}
+              title="No Requirements Found"
+              description="Add deliverables for your clients or copy from another month."
+              actionLabel="Add Work Requirement"
+              onAction={openCreateModal}
+            />
+          ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                    <th className="py-3.5 px-6">Client</th>
-                    <th className="py-3.5 px-6">Work Week</th>
-                    <th className="py-3.5 px-6">Posts</th>
-                    <th className="py-3.5 px-6">Reels</th>
-                    <th className="py-3.5 px-6">Stories</th>
-                    <th className="py-3.5 px-6">Notes</th>
-                    <th className="py-3.5 px-6 text-right">Actions</th>
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-100 text-slate-700 font-extrabold uppercase tracking-wider border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-4">Client</th>
+                    <th className="py-3 px-4">Work Week</th>
+                    <th className="py-3 px-4 text-center">Posts</th>
+                    <th className="py-3 px-4 text-center">Reels</th>
+                    <th className="py-3 px-4 text-center">Stories</th>
+                    <th className="py-3 px-4 text-center">Total Deliverables</th>
+                    <th className="py-3 px-4">Notes</th>
+                    <th className="py-3 px-5 text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 text-sm">
+                <tbody className="divide-y divide-slate-100">
                   {filteredRequirements.map((req) => {
                     const client = clients.find((c) => c.id === req.clientId);
                     const week = weeks.find((w) => w.id === req.weekId);
+                    const totalItems = (req.requirements?.posts || 0) + (req.requirements?.reels || 0) + (req.requirements?.stories || 0);
 
                     return (
-                      <tr key={req.id} className="hover:bg-slate-50 transition-colors">
-                        <td className="py-4 px-6">
-                          <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 rounded-xl bg-slate-100 text-slate-700 font-extrabold flex items-center justify-center text-xs">
-                              {client?.name ? client.name.charAt(0).toUpperCase() : 'C'}
-                            </div>
-                            <div>
-                              <p className="font-bold text-slate-900">
-                                {client?.name || req.clientName || 'Unknown Client'}
-                              </p>
-                              {client?.clientCode && (
-                                <p className="text-[11px] font-mono text-slate-400">{client.clientCode}</p>
-                              )}
-                            </div>
-                          </div>
+                      <tr key={req.id} className="hover:bg-slate-50 transition-all">
+                        <td className="py-3.5 px-4 font-bold text-slate-900">
+                          {client?.name || req.clientName || req.clientId}
                         </td>
-
-                        <td className="py-4 px-6 font-medium text-slate-700">
-                          {week?.name || 'Week ' + req.weekId}
+                        <td className="py-3.5 px-4 text-slate-600 font-medium">
+                          {week?.name || req.weekId}
                         </td>
-
-                        <td className="py-4 px-6 font-bold text-blue-600">
+                        <td className="py-3.5 px-4 text-center font-extrabold text-blue-700">
                           {req.requirements?.posts || 0}
                         </td>
-
-                        <td className="py-4 px-6 font-bold text-purple-600">
+                        <td className="py-3.5 px-4 text-center font-extrabold text-purple-700">
                           {req.requirements?.reels || 0}
                         </td>
-
-                        <td className="py-4 px-6 font-bold text-amber-600">
+                        <td className="py-3.5 px-4 text-center font-extrabold text-amber-700">
                           {req.requirements?.stories || 0}
                         </td>
-
-                        <td className="py-4 px-6 text-xs text-slate-500 max-w-xs truncate">
+                        <td className="py-3.5 px-4 text-center font-extrabold text-slate-900 bg-slate-50">
+                          {totalItems} Deliverables
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-500 max-w-xs truncate">
                           {req.notes || '—'}
                         </td>
-
-                        <td className="py-4 px-6 text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              icon={Edit2}
-                              onClick={() => openEditModal(req)}
-                              className="text-slate-600 hover:text-slate-900"
-                            >
-                              Edit
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              icon={Trash2}
-                              onClick={() => setDeleteTarget(req)}
-                              className="text-rose-600 hover:text-rose-700 hover:bg-rose-50"
-                            >
-                              Delete
-                            </Button>
-                          </div>
+                        <td className="py-3.5 px-5 text-right space-x-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            icon={Edit2}
+                            onClick={() => openEditModal(req)}
+                          />
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            icon={Trash2}
+                            onClick={() => setDeleteTarget(req)}
+                            className="text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                          />
                         </td>
                       </tr>
                     );
@@ -442,31 +480,28 @@ export default function RequirementsPage() {
                 </tbody>
               </table>
             </div>
-          </div>
-        )}
+          )}
+        </Card>
       </div>
 
-      {/* Add / Edit Modal */}
+      {/* Create / Edit Modal */}
       <Modal
         isOpen={isModalOpen}
-        onClose={() => !isSaving && setIsModalOpen(false)}
-        title={editingReq ? 'Edit Work Requirement' : 'Add Client Deliverables'}
-        subtitle="Specify requested deliverables for automated capacity allocation"
+        onClose={() => setIsModalOpen(false)}
+        title={editingReq ? 'Edit Client Deliverables' : 'Add Client Deliverables'}
       >
         <form onSubmit={handleSave} className="space-y-4">
           <Select
             label="Client"
-            name="clientId"
             value={formData.clientId}
             onChange={(e) => setFormData({ ...formData, clientId: e.target.value })}
-            options={clients.map((c) => ({ value: c.id, label: `${c.name} (${c.clientCode || 'No Code'})` }))}
+            options={clients.map((c) => ({ value: c.id, label: c.name }))}
             error={errors.clientId}
             required
           />
 
           <Select
-            label="Target Work Week"
-            name="weekId"
+            label="Work Week"
             value={formData.weekId}
             onChange={(e) => setFormData({ ...formData, weekId: e.target.value })}
             options={weeks.map((w) => ({ value: w.id, label: `${w.name} (${w.startDate})` }))}
@@ -474,10 +509,9 @@ export default function RequirementsPage() {
             required
           />
 
-          <div className="grid grid-cols-3 gap-3 p-4 rounded-xl bg-slate-50 border border-slate-200">
+          <div className="grid grid-cols-3 gap-3">
             <Input
               label="Posts"
-              name="posts"
               type="number"
               min="0"
               value={formData.requirements.posts}
@@ -487,11 +521,9 @@ export default function RequirementsPage() {
                   requirements: { ...formData.requirements, posts: Number(e.target.value) || 0 },
                 })
               }
-              error={errors['requirements.posts']}
             />
             <Input
               label="Reels"
-              name="reels"
               type="number"
               min="0"
               value={formData.requirements.reels}
@@ -501,11 +533,9 @@ export default function RequirementsPage() {
                   requirements: { ...formData.requirements, reels: Number(e.target.value) || 0 },
                 })
               }
-              error={errors['requirements.reels']}
             />
             <Input
               label="Stories"
-              name="stories"
               type="number"
               min="0"
               value={formData.requirements.stories}
@@ -515,116 +545,133 @@ export default function RequirementsPage() {
                   requirements: { ...formData.requirements, stories: Number(e.target.value) || 0 },
                 })
               }
-              error={errors['requirements.stories']}
             />
           </div>
 
           <Textarea
-            label="Deliverable Notes / Focus (Optional)"
-            name="notes"
-            placeholder="e.g. Festival campaigns, carousel heavy, reel video editing emphasis..."
+            label="Notes"
             value={formData.notes}
             onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
             rows={2}
           />
 
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
-            <Button
-              variant="secondary"
-              onClick={() => setIsModalOpen(false)}
-              disabled={isSaving}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              isLoading={isSaving}
-              className="bg-slate-900 hover:bg-slate-800 text-white font-semibold"
-            >
+          <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+            <Button variant="secondary" onClick={() => setIsModalOpen(false)}>Cancel</Button>
+            <Button type="submit" variant="primary" isLoading={isSaving} className="bg-slate-900 hover:bg-slate-800 text-white font-bold">
               {editingReq ? 'Update Deliverables' : 'Save Deliverables'}
             </Button>
           </div>
         </form>
       </Modal>
 
-      {/* Delete Modal */}
+      {/* Delete Confirmation Modal */}
       <ConfirmModal
         isOpen={Boolean(deleteTarget)}
-        onClose={() => !isDeleting && setDeleteTarget(null)}
+        onClose={() => setDeleteTarget(null)}
         onConfirm={handleDelete}
         title="Delete Requirement"
-        message="Are you sure you want to remove this client requirement?"
+        message="Are you sure you want to delete this deliverable requirement?"
         confirmText="Delete Requirement"
         isLoading={isDeleting}
       />
 
-      {/* Copy Week Requirements Modal */}
+      {/* Copy Requirements Modal (Month or Week) */}
       {isCopyModalOpen && (
         <Modal
           isOpen={isCopyModalOpen}
-          onClose={() => !isCopying && setIsCopyModalOpen(false)}
-          title="Copy Week Requirements"
-          subtitle="Clone all client deliverables from one work week into another work week"
+          onClose={() => setIsCopyModalOpen(false)}
+          title="Clone / Copy Client Deliverables"
+          subtitle="Quickly replicate deliverables between Months or between specific Work Weeks"
         >
           <form onSubmit={handleCopy} className="space-y-4">
-            <Select
-              label="Source Work Week (Copy From)"
-              value={copyData.sourceWeekId}
-              onChange={(e) => setCopyData({ ...copyData, sourceWeekId: e.target.value })}
-              options={[
-                { value: '', label: '-- Choose Source Week --' },
-                ...weeks.map((w) => {
-                  const count = requirements.filter((r) => r.weekId === w.id).length;
-                  return {
-                    value: w.id,
-                    label: `${w.name} (${w.startDate}) • ${count} Client Deliverables`,
-                  };
-                }),
-              ]}
-              required
-            />
+            {/* Mode Switcher */}
+            <div className="flex items-center gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
+              <button
+                type="button"
+                onClick={() => setCopyMode('month')}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-extrabold ${
+                  copyMode === 'month' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-700'
+                }`}
+              >
+                1. Copy Entire Month
+              </button>
+              <button
+                type="button"
+                onClick={() => setCopyMode('week')}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-extrabold ${
+                  copyMode === 'week' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-700'
+                }`}
+              >
+                2. Copy Single Week
+              </button>
+            </div>
 
-            <Select
-              label="Target Work Week (Copy To)"
-              value={copyData.targetWeekId}
-              onChange={(e) => setCopyData({ ...copyData, targetWeekId: e.target.value })}
-              options={[
-                { value: '', label: '-- Choose Target Week --' },
-                ...weeks
-                  .filter((w) => w.id !== copyData.sourceWeekId)
-                  .map((w) => {
-                    const count = requirements.filter((r) => r.weekId === w.id).length;
-                    return {
+            {copyMode === 'month' ? (
+              <>
+                <Select
+                  label="Source Month (Copy From)"
+                  value={copyData.sourceMonthKey}
+                  onChange={(e) => setCopyData({ ...copyData, sourceMonthKey: e.target.value })}
+                  options={[
+                    { value: '', label: '-- Choose Source Month --' },
+                    ...months.map((m) => ({
+                      value: m.monthKey,
+                      label: `${m.monthLabel} (${m.weeks.length} Weeks)`,
+                    })),
+                  ]}
+                  required
+                />
+
+                <Select
+                  label="Target Month (Copy To)"
+                  value={copyData.targetMonthKey}
+                  onChange={(e) => setCopyData({ ...copyData, targetMonthKey: e.target.value })}
+                  options={[
+                    { value: '', label: '-- Choose Target Month --' },
+                    ...months
+                      .filter((m) => m.monthKey !== copyData.sourceMonthKey)
+                      .map((m) => ({
+                        value: m.monthKey,
+                        label: `${m.monthLabel} (${m.weeks.length} Weeks)`,
+                      })),
+                  ]}
+                  required
+                />
+              </>
+            ) : (
+              <>
+                <Select
+                  label="Source Week (Copy From)"
+                  value={copyData.sourceWeekId}
+                  onChange={(e) => setCopyData({ ...copyData, sourceWeekId: e.target.value })}
+                  options={[
+                    { value: '', label: '-- Choose Source Week --' },
+                    ...weeks.map((w) => ({
                       value: w.id,
-                      label: `${w.name} (${w.startDate}) • currently ${count} items`,
-                    };
-                  }),
-              ]}
-              required
-            />
+                      label: `${w.name} (${w.startDate})`,
+                    })),
+                  ]}
+                  required
+                />
 
-            {/* Info Preview */}
-            {copyData.sourceWeekId && (
-              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1.5">
-                <div className="flex justify-between font-medium text-slate-700">
-                  <span>Source Deliverables:</span>
-                  <span className="font-extrabold text-slate-900">
-                    {requirements.filter((r) => r.weekId === copyData.sourceWeekId).length} Client Requirements
-                  </span>
-                </div>
-                {copyData.targetWeekId && (
-                  <div className="flex justify-between font-medium text-slate-700">
-                    <span>Target Week Current Items:</span>
-                    <span className="font-bold text-slate-700">
-                      {requirements.filter((r) => r.weekId === copyData.targetWeekId).length} Existing Items
-                    </span>
-                  </div>
-                )}
-              </div>
+                <Select
+                  label="Target Week (Copy To)"
+                  value={copyData.targetWeekId}
+                  onChange={(e) => setCopyData({ ...copyData, targetWeekId: e.target.value })}
+                  options={[
+                    { value: '', label: '-- Choose Target Week --' },
+                    ...weeks
+                      .filter((w) => w.id !== copyData.sourceWeekId)
+                      .map((w) => ({
+                        value: w.id,
+                        label: `${w.name} (${w.startDate})`,
+                      })),
+                  ]}
+                  required
+                />
+              </>
             )}
 
-            {/* Overwrite Toggle */}
             <div className="p-3.5 rounded-xl bg-indigo-50/70 border border-indigo-200">
               <label className="flex items-start gap-2.5 cursor-pointer">
                 <input
@@ -633,32 +680,16 @@ export default function RequirementsPage() {
                   onChange={(e) => setCopyData({ ...copyData, overwrite: e.target.checked })}
                   className="mt-0.5 rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500"
                 />
-                <div>
-                  <span className="text-xs text-indigo-950 font-bold block">
-                    Overwrite existing deliverables in target week
-                  </span>
-                  <span className="text-[11px] text-indigo-800 block mt-0.5 leading-relaxed">
-                    If checked, existing requirements in the target week will be replaced with the cloned source requirements. If unchecked, existing client entries are preserved.
-                  </span>
-                </div>
+                <span className="text-xs text-indigo-950 font-bold">
+                  Overwrite existing deliverables in target {copyMode === 'month' ? 'month' : 'week'}
+                </span>
               </label>
             </div>
 
-            <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
-              <Button
-                variant="secondary"
-                onClick={() => setIsCopyModalOpen(false)}
-                disabled={isCopying}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                variant="primary"
-                isLoading={isCopying}
-                className="bg-slate-900 hover:bg-slate-800 text-white font-bold"
-              >
-                Copy & Apply Deliverables
+            <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+              <Button variant="secondary" onClick={() => setIsCopyModalOpen(false)}>Cancel</Button>
+              <Button type="submit" variant="primary" isLoading={isCopying} className="bg-slate-900 hover:bg-slate-800 text-white font-bold">
+                Copy Deliverables
               </Button>
             </div>
           </form>

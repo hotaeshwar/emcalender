@@ -16,7 +16,8 @@ import { useToast } from '@/contexts/ToastContext';
 import {
   subscribeAllocations,
   deleteAllocation,
-  clearWeeklyAllocations
+  clearWeeklyAllocations,
+  clearMonthlyAllocations
 } from '@/services/allocationService';
 import { subscribeWorkWeeks } from '@/services/weekService';
 import { subscribeClients } from '@/services/clientService';
@@ -25,6 +26,7 @@ import { subscribeSurplusWork } from '@/services/allocationService';
 import { subscribeEmployeeAvailability } from '@/services/availabilityService';
 import { generateDailySchedule } from '@/lib/allocationEngine';
 import { exportAllocationReport } from '@/lib/exportExcel';
+import { groupWeeksByMonth, getActiveMonth } from '@/lib/monthUtils';
 import Link from 'next/link';
 import Input from '@/components/common/Input';
 import {
@@ -43,18 +45,21 @@ import {
   List,
   Search,
   Filter,
-  RotateCcw
+  RotateCcw,
+  Layers
 } from 'lucide-react';
 import { ROLES, ROLE_OPTIONS } from '@/lib/constants';
 
 export default function AllocationsListPage() {
   const [allocations, setAllocations] = useState([]);
   const [weeks, setWeeks] = useState([]);
+  const [months, setMonths] = useState([]);
+  const [selectedMonthKey, setSelectedMonthKey] = useState('all');
+  const [selectedWeekFilter, setSelectedWeekFilter] = useState('all'); // 'all' (Full Month) | weekId
   const [clients, setClients] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [surplusList, setSurplusList] = useState([]);
   const [availabilityList, setAvailabilityList] = useState([]);
-  const [selectedWeekId, setSelectedWeekId] = useState('');
   const [viewMode, setViewMode] = useState('matrix'); // 'matrix' | 'schedule' | 'list'
   const [loading, setLoading] = useState(true);
 
@@ -77,6 +82,12 @@ export default function AllocationsListPage() {
   useEffect(() => {
     const unsubWeeks = subscribeWorkWeeks((data) => {
       setWeeks(data || []);
+      const grouped = groupWeeksByMonth(data || []);
+      setMonths(grouped);
+      const activeM = getActiveMonth(data || []);
+      if (activeM && selectedMonthKey === 'all') {
+        setSelectedMonthKey(activeM.monthKey);
+      }
     });
 
     const unsubClients = subscribeClients(setClients);
@@ -99,11 +110,25 @@ export default function AllocationsListPage() {
     };
   }, []);
 
-  const weekAllocations = selectedWeekId && selectedWeekId !== 'all'
-    ? allocations.filter((a) => a.weekId === selectedWeekId || a.weekName === selectedWeekId)
-    : allocations;
+  const currentMonthData = months.find((m) => m.monthKey === selectedMonthKey) || months[0];
+  const monthWeeks = currentMonthData?.weeks || weeks;
 
-  const filteredAllocations = weekAllocations.filter((a) => {
+  // Filter allocations by Month and optionally Week
+  const scopeAllocations = allocations.filter((a) => {
+    // 1. Month filter
+    if (selectedMonthKey !== 'all') {
+      const matchMonth = a.monthKey === selectedMonthKey || (a.date && a.date.startsWith(selectedMonthKey)) ||
+                         monthWeeks.some(w => w.id === a.weekId || w.name === a.weekName);
+      if (!matchMonth) return false;
+    }
+    // 2. Week filter inside Month
+    if (selectedWeekFilter !== 'all') {
+      if (a.weekId !== selectedWeekFilter && a.weekName !== selectedWeekFilter) return false;
+    }
+    return true;
+  });
+
+  const filteredAllocations = scopeAllocations.filter((a) => {
     if (clientFilter !== 'all' && a.clientId !== clientFilter) return false;
     if (employeeFilter !== 'all' && a.employeeId !== employeeFilter && a.employeeCode !== employeeFilter) return false;
     if (roleFilter !== 'all' && (a.employeeRole || '').toLowerCase() !== roleFilter.toLowerCase()) return false;
@@ -117,19 +142,7 @@ export default function AllocationsListPage() {
     return true;
   });
 
-  const currentWeek = weeks.find((w) => w.id === selectedWeekId) || weeks[0];
-  const currentSurplus = surplusList.filter((s) => s.weekId === selectedWeekId);
-
-  const hasActiveFilters = searchQuery || roleFilter !== 'all' || clientFilter !== 'all' || employeeFilter !== 'all' || assignmentTypeFilter !== 'all' || (selectedWeekId && selectedWeekId !== 'all');
-
-  const resetFilters = () => {
-    setSearchQuery('');
-    setRoleFilter('all');
-    setClientFilter('all');
-    setEmployeeFilter('all');
-    setAssignmentTypeFilter('all');
-    setSelectedWeekId('all');
-  };
+  const currentWeek = weeks.find((w) => w.id === selectedWeekFilter);
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
@@ -149,12 +162,20 @@ export default function AllocationsListPage() {
   const handleClearAllocations = async () => {
     setIsClearing(true);
     try {
-      const res = await clearWeeklyAllocations({
-        weekId: selectedWeekId !== 'all' ? selectedWeekId : null,
-        clearSurplus: true,
-      });
-      const weekName = weeks.find((w) => w.id === selectedWeekId)?.name || 'All Weeks';
-      success(`Successfully cleared ${res.deletedAllocCount} allocations for ${weekName}!`, 'Table Cleared');
+      if (selectedWeekFilter !== 'all') {
+        const res = await clearWeeklyAllocations({
+          weekId: selectedWeekFilter,
+          clearSurplus: true,
+        });
+        success(`Successfully cleared ${res.deletedAllocCount} allocations for ${currentWeek?.name || 'Selected Week'}!`, 'Table Cleared');
+      } else {
+        const res = await clearMonthlyAllocations({
+          monthKey: selectedMonthKey !== 'all' ? selectedMonthKey : null,
+          clearSurplus: true,
+        });
+        const mLabel = currentMonthData?.monthLabel || 'All Months';
+        success(`Successfully cleared ${res.deletedAllocCount} allocations for ${mLabel}!`, 'Table Cleared');
+      }
       setIsClearModalOpen(false);
     } catch (err) {
       console.error(err);
@@ -165,10 +186,13 @@ export default function AllocationsListPage() {
   };
 
   const handleExportExcel = () => {
+    const isWeekSpecific = selectedWeekFilter !== 'all' && Boolean(currentWeek);
     exportAllocationReport({
-      week: currentWeek,
+      week: isWeekSpecific ? currentWeek : { name: currentMonthData?.monthLabel || 'All Months' },
+      monthLabel: currentMonthData?.monthLabel,
+      isMonthly: !isWeekSpecific,
+      title: isWeekSpecific ? `${currentWeek.name} Allocation Matrix` : `${currentMonthData?.monthLabel || 'All Months'} Full Month Matrix`,
       allocations: filteredAllocations,
-      surplus: currentSurplus,
       clients,
       employees,
     });
@@ -178,24 +202,27 @@ export default function AllocationsListPage() {
   return (
     <AppLayout
       title="Bid Employee Work Distributer Allocations"
-      subtitle="View, manage, and export client x staff deliverable allocations in matrix format"
+      subtitle="View, manage, and export client x staff deliverable allocations in Month-Wise and Week-Wise matrix format"
     >
       <div className="space-y-6 bg-white">
-        {/* Controls Bar with Animated Download Excel Button & View Mode Toggle */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-4 rounded-2xl bg-white border border-slate-200 shadow-sm">
+        {/* Controls Bar */}
+        <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4 p-4 rounded-2xl bg-white border border-slate-200 shadow-sm">
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">
-              Filter by Week:
+              Filter by Month:
             </span>
-            <div className="w-60">
+            <div className="w-56">
               <Select
-                value={selectedWeekId || 'all'}
-                onChange={(e) => setSelectedWeekId(e.target.value)}
+                value={selectedMonthKey}
+                onChange={(e) => {
+                  setSelectedMonthKey(e.target.value);
+                  setSelectedWeekFilter('all');
+                }}
                 options={[
-                  { value: 'all', label: 'All Work Weeks' },
-                  ...weeks.map((w) => ({
-                    value: w.id,
-                    label: `${w.name} (${w.startDate})`,
+                  { value: 'all', label: 'All Months' },
+                  ...months.map((m) => ({
+                    value: m.monthKey,
+                    label: `${m.monthLabel} (${m.weeks.length} Wks)`,
                   })),
                 ]}
               />
@@ -213,7 +240,7 @@ export default function AllocationsListPage() {
                 }`}
               >
                 <Table className="w-3.5 h-3.5" />
-                <span>1. Matrix Grid View</span>
+                <span>1. Matrix Grid</span>
               </button>
               <button
                 type="button"
@@ -225,7 +252,7 @@ export default function AllocationsListPage() {
                 }`}
               >
                 <Clock className="w-3.5 h-3.5" />
-                <span>2. Day-Wise Schedule (Mon–Sat)</span>
+                <span>2. Day-Wise Timetables</span>
               </button>
               <button
                 type="button"
@@ -237,7 +264,7 @@ export default function AllocationsListPage() {
                 }`}
               >
                 <List className="w-3.5 h-3.5" />
-                <span>3. Record List View</span>
+                <span>3. Records List</span>
               </button>
             </div>
           </div>
@@ -262,11 +289,44 @@ export default function AllocationsListPage() {
 
             <Link href="/allocations/new">
               <Button variant="primary" size="sm" icon={Sparkles} className="bg-slate-900 hover:bg-slate-800 text-white font-bold shadow-sm">
-                Generate New Allocation
+                Generate Month Allocation
               </Button>
             </Link>
           </div>
         </div>
+
+        {/* Month & Week Sub-Tabs Selector */}
+        {selectedMonthKey !== 'all' && monthWeeks.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 p-2 bg-slate-50 border border-slate-200 rounded-2xl">
+            <button
+              type="button"
+              onClick={() => setSelectedWeekFilter('all')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all ${
+                selectedWeekFilter === 'all'
+                  ? 'bg-slate-900 text-white shadow-sm'
+                  : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-200'
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>Full {currentMonthData?.monthLabel || 'Month'} Combined</span>
+            </button>
+
+            {monthWeeks.map((w) => (
+              <button
+                key={w.id}
+                type="button"
+                onClick={() => setSelectedWeekFilter(w.id)}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all ${
+                  selectedWeekFilter === w.id
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'bg-white text-slate-700 border border-slate-200 hover:bg-indigo-50 hover:text-indigo-900'
+                }`}
+              >
+                {w.name} ({w.startDate})
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Extended Interactive Filter Bar */}
         <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
@@ -294,7 +354,7 @@ export default function AllocationsListPage() {
                 />
               </div>
 
-              <div className="w-48">
+              <div className="w-44">
                 <Select
                   value={clientFilter}
                   onChange={(e) => setClientFilter(e.target.value)}
@@ -311,7 +371,7 @@ export default function AllocationsListPage() {
                   onChange={(e) => setEmployeeFilter(e.target.value)}
                   options={[
                     { value: 'all', label: 'All Staff' },
-                    ...employees.map((emp) => ({ value: emp.id, label: `${emp.name} (${emp.employeeCode || emp.role})` })),
+                    ...employees.map((e) => ({ value: e.id, label: `${e.name} (${e.employeeCode || 'Emp'})` })),
                   ]}
                 />
               </div>
@@ -322,78 +382,46 @@ export default function AllocationsListPage() {
                   onChange={(e) => setAssignmentTypeFilter(e.target.value)}
                   options={[
                     { value: 'all', label: 'All Types' },
-                    { value: 'automatic', label: 'Auto' },
+                    { value: 'automatic', label: 'Automated' },
                     { value: 'manual', label: 'Manual' },
                   ]}
                 />
               </div>
 
-              {hasActiveFilters && (
+              {(searchQuery || roleFilter !== 'all' || clientFilter !== 'all' || employeeFilter !== 'all' || assignmentTypeFilter !== 'all') && (
                 <button
                   type="button"
-                  onClick={resetFilters}
-                  className="px-3 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-200 rounded-xl flex items-center gap-1.5 transition-all"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setRoleFilter('all');
+                    setClientFilter('all');
+                    setEmployeeFilter('all');
+                    setAssignmentTypeFilter('all');
+                  }}
+                  className="px-3 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-200 rounded-xl flex items-center gap-1 transition-all"
                 >
-                  <RotateCcw className="w-3.5 h-3.5" />
+                  <RotateCcw className="w-3 h-3" />
                   <span>Reset</span>
                 </button>
               )}
             </div>
           </div>
-
-          <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200">
-            <span className="font-extrabold text-slate-700">
-              Showing {filteredAllocations.length} of {weekAllocations.length} allocations for {currentWeek?.name || 'Selected Week'}
-            </span>
-            {hasActiveFilters && (
-              <span className="text-indigo-700 font-bold bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
-                Filters Applied
-              </span>
-            )}
-          </div>
         </div>
 
-        {/* Surplus Alert if unassigned items exist */}
-        {currentSurplus.filter((s) => s.status !== 'assigned').length > 0 && (
-          <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-950">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold flex-shrink-0">
-                <AlertTriangle className="w-4 h-4" />
-              </div>
-              <div>
-                <p className="font-extrabold text-sm">
-                  {currentSurplus.filter((s) => s.status !== 'assigned').length} Surplus Items Requiring Manual Distribution
-                </p>
-                <p className="text-rose-800 font-medium">
-                  Deliverables that exceeded team capacity during auto-allocation can be manually distributed to staff.
-                </p>
-              </div>
-            </div>
-            <Link href="/surplus" className="flex-shrink-0">
-              <Button variant="primary" size="sm" icon={ArrowRight} className="bg-rose-700 hover:bg-rose-800 text-white font-bold">
-                Distribute Surplus Work
-              </Button>
-            </Link>
-          </div>
-        )}
-
-        {/* Content Section */}
-        {loading ? (
-          <SkeletonTable rows={5} cols={7} />
-        ) : viewMode === 'matrix' ? (
-          /* Exact Matrix Grid Format Matching User Image */
-          <div className="space-y-3">
-            <div className="flex items-center justify-between px-1">
-              <span className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">
-                Distribution Schedule ({currentWeek?.name || 'Active Week'})
-              </span>
-              <span className="text-xs text-slate-600 font-bold">
-                {clients.length} Clients • {employees.length} Staff Members
-              </span>
-            </div>
-
+        {/* VIEW 1: MATRIX GRID VIEW */}
+        {viewMode === 'matrix' && (
+          <div className="space-y-4">
             <AgencyMatrixGrid
-              week={currentWeek}
+              week={selectedWeekFilter !== 'all' ? currentWeek : null}
+              monthLabel={currentMonthData?.monthLabel}
+              title={
+                selectedWeekFilter !== 'all' && currentWeek
+                  ? `${currentWeek.name.toUpperCase()} (${currentWeek.startDate} to ${currentWeek.endDate})`
+                  : selectedMonthKey !== 'all'
+                  ? `${currentMonthData?.monthLabel?.toUpperCase()} • FULL MONTH ALLOCATION MATRIX`
+                  : 'ALL MONTHS ALLOCATION MATRIX'
+              }
+              isMonthly={selectedWeekFilter === 'all'}
               clients={clients}
               employees={employees}
               allocations={filteredAllocations}
@@ -403,163 +431,133 @@ export default function AllocationsListPage() {
               roleFilter={roleFilter}
             />
           </div>
-        ) : viewMode === 'schedule' ? (
-          /* Day-Wise Production Schedule (Monday through Saturday) */
-          <div className="space-y-3">
-            <div className="flex items-center justify-between px-1">
-              <span className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">
-                Day-by-Day Production Schedule ({currentWeek?.name || 'Active Week'})
-              </span>
-              <span className="text-xs text-slate-600 font-bold">
-                Monday through Saturday Staff Deliverable Allocation
-              </span>
-            </div>
+        )}
 
-            <DailyScheduleTimetable
-              dailySchedules={generateDailySchedule(
-                filteredAllocations,
+        {/* VIEW 2: DAY-WISE SCHEDULE VIEW */}
+        {viewMode === 'schedule' && (
+          <div className="space-y-6">
+            {(selectedWeekFilter !== 'all' ? [currentWeek].filter(Boolean) : monthWeeks).map((wk) => {
+              const wkAllocations = filteredAllocations.filter((a) => a.weekId === wk.id || a.weekName === wk.name);
+              const dailySchedules = generateDailySchedule(
+                wk,
                 employees,
-                currentWeek,
-                currentWeek?.holidays || [],
+                wkAllocations,
+                [],
                 availabilityList
-              )}
-              workWeek={currentWeek}
-              employees={employees}
-              clients={clients}
-              employeeFilter={employeeFilter}
-              roleFilter={roleFilter}
-              searchQuery={searchQuery}
-            />
+              );
+
+              return (
+                <Card key={wk.id}>
+                  <CardHeader
+                    title={`${wk.name} Daily Schedule Timetable (${wk.startDate} to ${wk.endDate})`}
+                    subtitle={`Day-wise staff assignments across ${wk.calculatedWorkingDays || 5} effective working days`}
+                  />
+                  <DailyScheduleTimetable
+                    workWeek={wk}
+                    dailySchedules={dailySchedules}
+                    employees={employees}
+                  />
+                </Card>
+              );
+            })}
           </div>
-        ) : (
-          /* List View */
+        )}
+
+        {/* VIEW 3: RECORDS LIST VIEW */}
+        {viewMode === 'list' && (
           <Card>
             <CardHeader
-              title="Saved Allocation Records"
-              subtitle={currentWeek ? `Showing assignments for ${currentWeek.name}` : 'All assignments'}
-              action={
-                <Badge variant="brand" size="sm">
-                  {filteredAllocations.length} Active Records
-                </Badge>
-              }
+              title={`Committed Allocation Records (${filteredAllocations.length})`}
+              subtitle={`Detailed deliverables breakdown for ${selectedMonthKey !== 'all' ? currentMonthData?.monthLabel : 'All Months'}`}
             />
-
             {filteredAllocations.length === 0 ? (
               <EmptyState
-                icon={Sparkles}
+                icon={Calendar}
                 title="No Allocations Found"
-                description="No allocations have been saved for this week yet. Run the auto allocation engine to distribute client deliverables."
-                action={
-                  <Link href="/allocations/new">
-                    <Button variant="primary" icon={Sparkles} className="bg-slate-900 hover:bg-slate-800 text-white font-bold">
-                      Run Auto Allocation Now
-                    </Button>
-                  </Link>
-                }
+                description="Generate an allocation or adjust your filters above."
+                actionLabel="Generate Month Allocation"
+                actionHref="/allocations/new"
               />
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
-                      <th className="py-3.5 px-5">Client</th>
-                      <th className="py-3.5 px-5">Assigned Staff</th>
-                      <th className="py-3.5 px-4">Role</th>
-                      <th className="py-3.5 px-4 text-center">Posts</th>
-                      <th className="py-3.5 px-4 text-center">Reels</th>
-                      <th className="py-3.5 px-4 text-center">Stories</th>
-                      <th className="py-3.5 px-5 text-center">Effort Units</th>
-                      <th className="py-3.5 px-4 text-center">Type</th>
-                      <th className="py-3.5 px-5 text-right">Action</th>
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-slate-100 text-slate-700 font-extrabold uppercase tracking-wider border-b border-slate-200">
+                    <tr>
+                      <th className="py-3 px-4">Client</th>
+                      <th className="py-3 px-4">Staff Member</th>
+                      <th className="py-3 px-4">Role</th>
+                      <th className="py-3 px-4">Work Week / Month</th>
+                      <th className="py-3 px-4 text-center">Posts</th>
+                      <th className="py-3 px-4 text-center">Reels</th>
+                      <th className="py-3 px-4 text-center">Stories</th>
+                      <th className="py-3 px-5 text-center">Capacity</th>
+                      <th className="py-3 px-4 text-center">Type</th>
+                      <th className="py-3 px-5 text-right">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100 text-sm">
-                    {filteredAllocations.map((alloc) => {
-                      const client = clients.find((c) => c.id === alloc.clientId);
-                      return (
-                        <tr key={alloc.id} className="hover:bg-slate-50/80 transition-colors">
-                          <td className="py-3.5 px-5 font-bold text-slate-900">
-                            <p>{client?.name || alloc.clientId}</p>
-                            {client?.clientCode && (
-                              <p className="text-[11px] font-mono text-slate-500">{client.clientCode}</p>
-                            )}
-                          </td>
-
-                          <td className="py-3.5 px-5 font-bold text-slate-900">
-                            <p>{alloc.employeeName}</p>
-                            <p className="text-[11px] font-mono text-slate-500 font-semibold">{alloc.employeeCode}</p>
-                          </td>
-
-                          <td className="py-3.5 px-4">
-                            <Badge role={alloc.employeeRole} size="sm" />
-                          </td>
-
-                          <td className="py-3.5 px-4 text-center font-extrabold text-blue-700">
-                            {alloc.work?.posts || 0}
-                          </td>
-
-                          <td className="py-3.5 px-4 text-center font-extrabold text-purple-700">
-                            {alloc.work?.reels || 0}
-                          </td>
-
-                          <td className="py-3.5 px-4 text-center font-extrabold text-amber-700">
-                            {alloc.work?.stories || 0}
-                          </td>
-
-                          <td className="py-3.5 px-5 text-center font-extrabold text-indigo-700 bg-indigo-50/50">
-                            {alloc.capacityUsed} Units
-                          </td>
-
-                          <td className="py-3.5 px-4 text-center">
-                            {alloc.assignmentType === 'manual' ? (
-                              <Badge variant="warning" size="sm">Manual</Badge>
-                            ) : (
-                              <Badge variant="success" size="sm">Auto</Badge>
-                            )}
-                          </td>
-
-                          <td className="py-3.5 px-5 text-right">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              icon={Trash2}
-                              onClick={() => setDeleteTarget(alloc)}
-                              className="text-slate-400 hover:text-rose-600 hover:bg-rose-50"
-                            />
-                          </td>
-                        </tr>
-                      );
-                    })}
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredAllocations.map((alloc) => (
+                      <tr key={alloc.id} className="hover:bg-slate-50 transition-all">
+                        <td className="py-3.5 px-4 font-bold text-slate-900">{alloc.clientName || alloc.clientId}</td>
+                        <td className="py-3.5 px-4 font-bold text-slate-900">{alloc.employeeName || alloc.employeeId}</td>
+                        <td className="py-3.5 px-4"><Badge role={alloc.employeeRole} size="sm" /></td>
+                        <td className="py-3.5 px-4 text-slate-600 font-medium">{alloc.weekName || alloc.weekId || alloc.monthKey || 'Month'}</td>
+                        <td className="py-3.5 px-4 text-center font-extrabold text-blue-700">{alloc.work?.posts || 0}</td>
+                        <td className="py-3.5 px-4 text-center font-extrabold text-purple-700">{alloc.work?.reels || 0}</td>
+                        <td className="py-3.5 px-4 text-center font-extrabold text-amber-700">{alloc.work?.stories || 0}</td>
+                        <td className="py-3.5 px-5 text-center font-extrabold text-indigo-700 bg-indigo-50/50">{alloc.capacityUsed} Units</td>
+                        <td className="py-3.5 px-4 text-center">
+                          <Badge variant={alloc.assignmentType === 'manual' ? 'warning' : 'success'} size="sm">
+                            {alloc.assignmentType === 'manual' ? 'Manual' : 'Auto'}
+                          </Badge>
+                        </td>
+                        <td className="py-3.5 px-5 text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            icon={Trash2}
+                            onClick={() => setDeleteTarget(alloc)}
+                            className="text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                          />
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
             )}
           </Card>
         )}
+
+        {/* Delete Confirmation Modal */}
+        <ConfirmModal
+          isOpen={Boolean(deleteTarget)}
+          onClose={() => !isDeleting && setDeleteTarget(null)}
+          onConfirm={handleDelete}
+          title="Delete Allocation Assignment"
+          message="Are you sure you want to delete this specific allocation record?"
+          confirmText="Delete Record"
+          isLoading={isDeleting}
+        />
+
+        {/* Clear All Allocations Confirmation Modal */}
+        <ConfirmModal
+          isOpen={isClearModalOpen}
+          onClose={() => !isClearing && setIsClearModalOpen(false)}
+          onConfirm={handleClearAllocations}
+          title={
+            selectedWeekFilter !== 'all'
+              ? `Clear Allocations for ${currentWeek?.name || 'Selected Week'}`
+              : `Clear Allocations for ${currentMonthData?.monthLabel || 'Selected Month'}`
+          }
+          message={`Are you sure you want to clear allocations${
+            selectedWeekFilter !== 'all' ? ` for ${currentWeek?.name}` : ` for ${currentMonthData?.monthLabel || 'All Months'}`
+          }? This will delete all committed staff assignments and surplus items for this period, allowing you to re-allocate fresh.`}
+          confirmText="Clear Allocations"
+          variant="danger"
+          isLoading={isClearing}
+        />
       </div>
-
-      {/* Delete Confirmation Modal */}
-      <ConfirmModal
-        isOpen={Boolean(deleteTarget)}
-        onClose={() => !isDeleting && setDeleteTarget(null)}
-        onConfirm={handleDelete}
-        title="Delete Allocation Assignment"
-        message="Are you sure you want to delete this specific allocation record?"
-        confirmText="Delete Record"
-        isLoading={isDeleting}
-      />
-
-      {/* Clear All Allocations Confirmation Modal */}
-      <ConfirmModal
-        isOpen={isClearModalOpen}
-        onClose={() => !isClearing && setIsClearModalOpen(false)}
-        onConfirm={handleClearAllocations}
-        title={selectedWeekId && selectedWeekId !== 'all' ? `Clear Allocations for ${currentWeek?.name || 'Selected Week'}` : 'Clear All Allocations'}
-        message={`Are you sure you want to completely clear the allocation table${selectedWeekId && selectedWeekId !== 'all' ? ` for ${currentWeek?.name}` : ' across all weeks'}? This will delete all committed staff assignments and surplus items for this period, allowing you to auto-allocate fresh.`}
-        confirmText="Clear Allocations"
-        variant="danger"
-        isLoading={isClearing}
-      />
     </AppLayout>
   );
 }

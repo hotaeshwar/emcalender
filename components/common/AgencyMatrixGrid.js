@@ -4,6 +4,9 @@ import React from 'react';
 
 export default function AgencyMatrixGrid({
   week,
+  title = null,
+  monthLabel = null,
+  isMonthly = false,
   clients = [],
   employees = [],
   allocations = [],
@@ -13,10 +16,16 @@ export default function AgencyMatrixGrid({
   employeeFilter = 'all',
   roleFilter = 'all',
 }) {
-  const displayHeader = dayName
+  const displayHeader = title
+    ? title.toUpperCase()
+    : monthLabel
+    ? `${monthLabel.toUpperCase()} (FULL MONTH SCHEDULE)`
+    : dayName
     ? dayName.toUpperCase()
     : week?.name
     ? `${week.name.toUpperCase()} (MON–SAT)`
+    : isMonthly
+    ? 'MONTHLY SCHEDULE'
     : 'WEEKLY SCHEDULE';
 
   // Build staff list strictly from active employees passed in from Firebase, filtered by role/staff/search

@@ -33,20 +33,23 @@ import {
   calculateUtilization,
   convertTaskToCapacityUnits
 } from '@/lib/capacityCalculator';
+import { groupWeeksByMonth, getActiveMonth } from '@/lib/monthUtils';
 import Link from 'next/link';
 import {
   AlertOctagon,
   Users,
   CheckCircle2,
   Calendar,
+  Sparkles,
+  ArrowRight,
+  ShieldAlert,
+  History,
+  Sliders,
   AlertTriangle,
+  Plus,
   UserCheck,
   Building2,
-  Sparkles,
-  Plus,
-  History,
-  Clock,
-  ArrowRight,
+  Layers,
   HelpCircle,
   FileCheck,
   Search,
@@ -61,8 +64,10 @@ export default function SurplusPage() {
   const [employees, setEmployees] = useState([]);
   const [clients, setClients] = useState([]);
   const [weeks, setWeeks] = useState([]);
+  const [months, setMonths] = useState([]);
   const [capacityRules, setCapacityRules] = useState([]);
   const [allocations, setAllocations] = useState([]);
+  const [selectedMonthKey, setSelectedMonthKey] = useState('all');
   const [selectedWeekId, setSelectedWeekId] = useState('all');
   const [surplusTab, setSurplusTab] = useState('unassigned'); // 'unassigned' | 'assigned' | 'all'
   const [loading, setLoading] = useState(true);

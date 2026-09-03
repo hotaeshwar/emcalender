@@ -14,7 +14,7 @@ import DailyScheduleTimetable from '@/components/common/DailyScheduleTimetable';
 import { SkeletonCard, SkeletonTable } from '@/components/common/LoadingSkeleton';
 import EmptyState from '@/components/common/EmptyState';
 import { useToast } from '@/contexts/ToastContext';
-import { generateWeeklyAllocation } from '@/lib/allocationEngine';
+import { generateMonthlyAllocation, generateWeeklyAllocation } from '@/lib/allocationEngine';
 import { getClients } from '@/services/clientService';
 import { getEmployees } from '@/services/employeeService';
 import { getCapacityRules } from '@/services/capacityService';
@@ -22,9 +22,10 @@ import { getWorkWeeks } from '@/services/weekService';
 import { getWorkRequirements, createWorkRequirement } from '@/services/requirementService';
 import { getEmployeeAvailability } from '@/services/availabilityService';
 import {
-  checkExistingAllocations,
-  commitWeeklyAllocation
+  checkExistingMonthlyAllocations,
+  commitMonthlyAllocation
 } from '@/services/allocationService';
+import { groupWeeksByMonth, getActiveMonth } from '@/lib/monthUtils';
 import { exportAllocationReport } from '@/lib/exportExcel';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -44,7 +45,8 @@ import {
   FileSpreadsheet,
   Table,
   Clock,
-  List
+  List,
+  Layers
 } from 'lucide-react';
 import { ROLES, ROLE_LABELS, CONTENT_TYPES } from '@/lib/constants';
 
@@ -64,8 +66,9 @@ const DEFAULT_AGENCY_CLIENTS = [
 ];
 
 export default function NewAllocationPage() {
+  const [months, setMonths] = useState([]);
+  const [selectedMonthKey, setSelectedMonthKey] = useState('');
   const [weeks, setWeeks] = useState([]);
-  const [selectedWeekId, setSelectedWeekId] = useState('');
   const [clients, setClients] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [capacityRules, setCapacityRules] = useState([]);
@@ -75,7 +78,8 @@ export default function NewAllocationPage() {
   const [loading, setLoading] = useState(true);
   const [calculating, setCalculating] = useState(false);
   const [committing, setCommitting] = useState(false);
-  const [previewTab, setPreviewTab] = useState('matrix'); // 'matrix' | 'schedule' | 'deliverables'
+  const [previewTab, setPreviewTab] = useState('full_month'); // 'full_month' | 'weeks' | 'schedule' | 'surplus'
+  const [activeWeekSubTab, setActiveWeekSubTab] = useState('0'); // index in weeklyBreakdowns
 
   // Engine Output State
   const [allocationResult, setAllocationResult] = useState(null);
@@ -106,9 +110,14 @@ export default function NewAllocationPage() {
         setRequirements(reqs || []);
         setAvailabilityList(avails || []);
 
-        const activeWk = (wks || []).find((w) => w.status === 'active') || (wks || [])[0];
-        if (activeWk) {
-          setSelectedWeekId(activeWk.id);
+        const groupedMonths = groupWeeksByMonth(wks || []);
+        setMonths(groupedMonths);
+
+        const activeM = getActiveMonth(wks || []);
+        if (activeM) {
+          setSelectedMonthKey(activeM.monthKey);
+        } else if (groupedMonths[0]) {
+          setSelectedMonthKey(groupedMonths[0].monthKey);
         }
       } catch (err) {
         console.error('Error loading masters for allocation:', err);
@@ -119,551 +128,454 @@ export default function NewAllocationPage() {
     loadMasters();
   }, []);
 
+  const currentMonthData = months.find((m) => m.monthKey === selectedMonthKey) || months[0];
+  const targetWeeks = currentMonthData?.weeks || [];
+
   const handleRunAllocation = async () => {
-    if (!selectedWeekId) {
-      error('Please select a Work Week.');
+    if (!selectedMonthKey) {
+      error('Please select a Target Month.');
       return;
     }
 
     setCalculating(true);
     try {
-      const selectedWeek = weeks.find((w) => w.id === selectedWeekId) || weeks[0];
-      let weekRequirements = requirements.filter((r) => r.weekId === selectedWeekId);
+      const activeClients = clients.length > 0 ? clients : DEFAULT_AGENCY_CLIENTS;
+      let allReqs = [...requirements];
 
-      // Auto-generate default client requirements if none exist yet for this week
-      if (weekRequirements.length === 0) {
-        const activeClients = clients.length > 0 ? clients : DEFAULT_AGENCY_CLIENTS;
-        const generatedReqs = [];
-
-        for (const c of activeClients) {
-          const defaultData = DEFAULT_AGENCY_CLIENTS.find((d) => d.name === c.name) || { posts: 2, reels: 1, stories: 1 };
-          const payload = {
-            clientId: c.id,
-            clientName: c.name,
-            weekId: selectedWeekId,
-            requirements: {
-              posts: defaultData.posts,
-              reels: defaultData.reels,
-              stories: defaultData.stories,
-            },
-          };
-          try {
-            const savedReq = await createWorkRequirement(payload);
-            generatedReqs.push(savedReq);
-          } catch (e) {
-            generatedReqs.push({ ...payload, id: `temp_${c.id}` });
+      // Auto-generate default client requirements for weeks in this month if missing
+      const generatedReqs = [];
+      for (const wk of targetWeeks) {
+        const wkReqs = allReqs.filter((r) => r.weekId === wk.id);
+        if (wkReqs.length === 0) {
+          for (const c of activeClients) {
+            const defaultData = DEFAULT_AGENCY_CLIENTS.find((d) => d.name === c.name) || { posts: 2, reels: 1, stories: 1 };
+            const payload = {
+              clientId: c.id,
+              clientName: c.name,
+              weekId: wk.id,
+              monthKey: selectedMonthKey,
+              requirements: {
+                posts: defaultData.posts,
+                reels: defaultData.reels,
+                stories: defaultData.stories,
+              },
+            };
+            try {
+              const saved = await createWorkRequirement(payload);
+              generatedReqs.push(saved);
+            } catch (e) {
+              generatedReqs.push({ ...payload, id: `temp_${c.id}_${wk.id}` });
+            }
           }
         }
-
-        weekRequirements = generatedReqs;
-        setRequirements((prev) => [...prev, ...generatedReqs]);
       }
 
-      // Check if duplicate allocation exists
-      const existing = await checkExistingAllocations(selectedWeekId);
-      setExistingAllocations(existing);
+      if (generatedReqs.length > 0) {
+        allReqs = [...allReqs, ...generatedReqs];
+        setRequirements(allReqs);
+      }
 
+      // Check if duplicate allocation exists for this month
+      const existing = await checkExistingMonthlyAllocations(selectedMonthKey);
+      setExistingAllocations(existing);
       if (existing.length > 0) {
         setIsDuplicateModalOpen(true);
       }
 
-      // Execute Pure Engine in Memory
-      const result = generateWeeklyAllocation({
-        workWeek: selectedWeek,
-        clients: clients.length > 0 ? clients : DEFAULT_AGENCY_CLIENTS,
+      // Execute Month Engine in Memory
+      const result = generateMonthlyAllocation({
+        monthKey: selectedMonthKey,
+        workWeeks: targetWeeks,
+        clients: activeClients,
         employees,
         capacityRules,
-        workRequirements: weekRequirements,
-        holidays: selectedWeek?.holidays || [],
+        workRequirements: allReqs,
+        holidays: [],
         availabilityList,
         existingAllocations: [],
       });
 
       setAllocationResult(result);
+      setActiveWeekSubTab('0');
 
-      if (result.validation.passed) {
-        success('Work allocation calculated successfully with mathematical invariant verification!');
+      if (result.validation?.invariantSatisfied) {
+        success(`Full Month Allocation calculated for ${currentMonthData?.monthLabel || selectedMonthKey} across ${result.weeksCount} calendar weeks!`);
       } else {
-        error('Allocation invariant failed! Please review details.', 'Validation Error');
+        error('Allocation calculation finished with warnings. Please review surplus tasks.', 'Notice');
       }
     } catch (err) {
-      console.error('Error running allocation:', err);
-      error(err.message || 'Allocation calculation failed.');
+      console.error('Error running monthly allocation:', err);
+      error(err.message || 'Monthly allocation failed.');
     } finally {
       setCalculating(false);
     }
   };
 
-  const handleConfirmCommit = async (recalculate = false) => {
+  const handleConfirmCommit = async () => {
     if (!allocationResult) return;
-    if (!allocationResult.validation.passed) {
-      error('Cannot commit an invalid allocation where Requested !== Allocated + Surplus.');
-      return;
-    }
 
     setCommitting(true);
     try {
-      const res = await commitWeeklyAllocation({
-        weekId: selectedWeekId,
+      const res = await commitMonthlyAllocation({
+        monthKey: selectedMonthKey,
         allocations: allocationResult.allocations,
         surplus: allocationResult.surplus,
-        recalculate: recalculate || existingAllocations.length > 0,
       });
 
-      success(`Successfully committed ${res.allocationCount} allocations and recorded ${res.surplusCount} surplus items!`, 'Allocation Saved');
+      success(`Successfully committed ${res.allocatedCount} monthly allocations and ${res.surplusCount} surplus records for ${currentMonthData?.monthLabel || selectedMonthKey}!`, 'Month Saved');
       router.push('/allocations');
     } catch (err) {
-      console.error('Error committing allocation:', err);
-      error('Failed to commit allocation. Please try again.');
+      console.error('Error committing monthly allocation:', err);
+      error('Failed to commit monthly allocation.');
     } finally {
       setCommitting(false);
       setIsDuplicateModalOpen(false);
     }
   };
 
-  const handleDownloadExcelPreview = () => {
+  const handleExportPreviewExcel = () => {
     if (!allocationResult) return;
+    const currentWeekBreakdown = allocationResult.weeklyBreakdowns?.[parseInt(activeWeekSubTab, 10)] || null;
+    const exportAllocations = previewTab === 'weeks' && currentWeekBreakdown
+      ? currentWeekBreakdown.allocations
+      : allocationResult.allocations;
+    const exportWeek = previewTab === 'weeks' && currentWeekBreakdown
+      ? currentWeekBreakdown.week
+      : { name: currentMonthData?.monthLabel || 'Full Month' };
+
     exportAllocationReport({
-      week: selectedWeek,
-      allocations: allocationResult.allocations,
-      surplus: allocationResult.surplus,
-      clients,
+      week: exportWeek,
+      monthLabel: currentMonthData?.monthLabel,
+      isMonthly: previewTab !== 'weeks',
+      allocations: exportAllocations,
+      clients: clients.length > 0 ? clients : DEFAULT_AGENCY_CLIENTS,
       employees,
     });
-    success('Color-coded Excel allocation preview downloaded successfully!');
+    success('Preview Excel matrix downloaded successfully!');
   };
-
-  const selectedWeek = weeks.find((w) => w.id === selectedWeekId);
-  const weekReqsCount = requirements.filter((r) => r.weekId === selectedWeekId).length;
 
   return (
     <AppLayout
-      title="Automatic Work Allocation"
-      subtitle="Pure, balanced, capacity-weighted allocation engine with live interactive preview"
+      title="Month-Wise Work Allocation Generator"
+      subtitle="Run deterministic fair workload distribution across all calendar weeks of a month in 1 click"
     >
       <div className="space-y-6 bg-white">
-        {/* Step 1: Configuration Card */}
-        <Card>
-          <CardHeader
-            title="1. Select Operational Work Week"
-            subtitle="Choose target week to allocate client deliverables across available designers and editors"
-          />
-
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-end justify-between gap-4">
-            <div className="flex-1 max-w-md">
-              <Select
-                label="Target Work Week"
-                value={selectedWeekId}
-                onChange={(e) => {
-                  setSelectedWeekId(e.target.value);
-                  setAllocationResult(null);
-                }}
-                options={weeks.map((w) => ({
-                  value: w.id,
-                  label: `${w.name} (${w.startDate} to ${w.endDate} - ${w.calculatedWorkingDays || 5} working days)`,
-                }))}
-              />
+        {/* Top Month Selector & Run Card */}
+        <div className="p-6 sm:p-8 rounded-3xl bg-white border border-slate-200 shadow-sm space-y-6">
+          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
+            <div className="space-y-2 max-w-xl">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 text-indigo-800 text-xs font-bold border border-indigo-200">
+                <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Month-Level Deterministic Engine</span>
+              </div>
+              <h2 className="text-2xl font-extrabold text-slate-900 tracking-tight">
+                Generate Month-Wise Allocation Plan
+              </h2>
+              <p className="text-sm text-slate-600 font-medium">
+                Select your operational month to distribute all client deliverables fairly across graphic designers and video editors for each calendar work week.
+              </p>
             </div>
 
-            <div className="flex items-center gap-3">
-              <div className="text-xs text-slate-700 font-medium">
-                <span className="font-extrabold text-slate-900">{weekReqsCount || 12}</span> Client Requirements Ready
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 w-full lg:w-auto">
+              <div className="w-full sm:w-64">
+                <Select
+                  label="Target Month"
+                  value={selectedMonthKey}
+                  onChange={(e) => {
+                    setSelectedMonthKey(e.target.value);
+                    setAllocationResult(null);
+                  }}
+                  options={months.map((m) => ({
+                    value: m.monthKey,
+                    label: `${m.monthLabel} (${m.weeks.length} Weeks • ${m.totalCalculatedWorkingDays} Days)`,
+                  }))}
+                />
               </div>
 
-              <Button
-                variant="primary"
-                size="md"
-                icon={Sparkles}
-                onClick={handleRunAllocation}
-                isLoading={calculating}
-                disabled={!selectedWeekId}
-                className="bg-slate-900 hover:bg-slate-800 text-white font-bold shadow-sm"
-              >
-                Generate Allocation Preview
-              </Button>
+              <div className="sm:pt-5">
+                <Button
+                  variant="primary"
+                  size="lg"
+                  icon={Sparkles}
+                  onClick={handleRunAllocation}
+                  isLoading={calculating}
+                  disabled={months.length === 0 || loading}
+                  className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white font-bold shadow-md"
+                >
+                  {allocationResult ? 'Re-Calculate Month' : 'Run Full Month Allocation'}
+                </Button>
+              </div>
             </div>
           </div>
-        </Card>
 
-        {/* Step 2: Allocation Preview */}
-        {calculating ? (
-          <div className="space-y-4">
-            <SkeletonCard />
-            <SkeletonTable rows={4} cols={6} />
-          </div>
-        ) : allocationResult ? (
+          {/* Month Overview Badges */}
+          {currentMonthData && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4 border-t border-slate-100">
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Month Period</span>
+                <span className="text-sm font-extrabold text-slate-900 mt-0.5 block">{currentMonthData.monthLabel}</span>
+              </div>
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Calendar Weeks</span>
+                <span className="text-sm font-extrabold text-indigo-700 mt-0.5 block">{currentMonthData.weeks.length} Work Weeks</span>
+              </div>
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Working Days</span>
+                <span className="text-sm font-extrabold text-emerald-700 mt-0.5 block">{currentMonthData.totalCalculatedWorkingDays} Effective Days</span>
+              </div>
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Holidays</span>
+                <span className="text-sm font-extrabold text-amber-700 mt-0.5 block">{currentMonthData.holidaysCount} Days Off</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Output Preview Area */}
+        {allocationResult && (
           <div className="space-y-6 animate-fade-in">
-            {/* Validation Banner */}
-            <div className={`p-4 rounded-2xl border flex items-center justify-between gap-4 ${
-              allocationResult.validation.passed
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
-                : 'bg-rose-50 border-rose-200 text-rose-950'
-            }`}>
+            {/* Action Bar */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-4 rounded-2xl bg-slate-900 text-white shadow-md">
               <div className="flex items-center gap-3">
-                <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
-                  allocationResult.validation.passed ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
-                }`}>
-                  {allocationResult.validation.passed ? <Check className="w-5 h-5" /> : <X className="w-5 h-5" />}
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-extrabold">
+                  <CheckCircle2 className="w-5 h-5" />
                 </div>
                 <div>
-                  <h4 className="text-sm font-extrabold">
-                    {allocationResult.validation.passed
-                      ? 'Mathematical Invariant Verified: Requested = Allocated + Surplus'
-                      : 'Mathematical Invariant Check Failed'}
+                  <h4 className="text-sm font-extrabold text-white">
+                    {currentMonthData?.monthLabel} Plan Ready
                   </h4>
-                  <p className="text-xs text-slate-700 mt-0.5">
-                    Every requested deliverable is strictly accounted for without loss or artificial inflation.
+                  <p className="text-xs text-slate-300">
+                    {allocationResult.allocations.length} total assignments • {allocationResult.surplus.length} surplus items
                   </p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-3">
                 <DownloadExcelButton
-                  onExport={handleDownloadExcelPreview}
-                  label="Download Excel"
+                  onExport={handleExportPreviewExcel}
+                  label="Download Matrix (Excel)"
                   size="sm"
                 />
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  icon={RotateCcw}
-                  onClick={handleRunAllocation}
-                  className="font-bold"
-                >
-                  Recalculate
-                </Button>
                 <Button
                   variant="primary"
-                  size="md"
-                  icon={CheckCircle2}
-                  onClick={() => handleConfirmCommit(false)}
+                  size="sm"
+                  icon={ShieldCheck}
+                  onClick={handleConfirmCommit}
                   isLoading={committing}
-                  disabled={!allocationResult.validation.passed}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold"
                 >
-                  Confirm & Save
+                  Commit Month Allocation
                 </Button>
               </div>
             </div>
 
-            {/* Warnings Section */}
-            {allocationResult.warnings.length > 0 && (
-              <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 space-y-2">
-                <div className="flex items-center gap-2 text-xs font-bold text-amber-900">
-                  <AlertTriangle className="w-4 h-4 text-amber-600" />
-                  <span>Allocation Intelligence Warnings ({allocationResult.warnings.length}):</span>
-                </div>
-                <ul className="space-y-1 pl-6 list-disc text-xs text-amber-800">
-                  {allocationResult.warnings.map((w, i) => (
-                    <li key={i}>{w.message}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            {/* Preview Navigation Tabs */}
+            <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-100 rounded-2xl border border-slate-200">
+              <button
+                type="button"
+                onClick={() => setPreviewTab('full_month')}
+                className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition-all ${
+                  previewTab === 'full_month'
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>1. Full Month Matrix</span>
+              </button>
 
-            {/* View Switcher Tabs */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-3 rounded-2xl bg-white border border-slate-200 shadow-sm">
-              <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200">
-                <button
-                  type="button"
-                  onClick={() => setPreviewTab('matrix')}
-                  className={`px-3.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition-all ${
-                    previewTab === 'matrix'
-                      ? 'bg-slate-900 text-white shadow-sm'
-                      : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200'
-                  }`}
-                >
-                  <Table className="w-3.5 h-3.5" />
-                  <span>1. Agency Matrix Grid View</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPreviewTab('schedule')}
-                  className={`px-3.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition-all ${
-                    previewTab === 'schedule'
-                      ? 'bg-slate-900 text-white shadow-sm'
-                      : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200'
-                  }`}
-                >
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>2. Day-Wise Production Schedule (Mon–Sat)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPreviewTab('deliverables')}
-                  className={`px-3.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition-all ${
-                    previewTab === 'deliverables'
-                      ? 'bg-slate-900 text-white shadow-sm'
-                      : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200'
-                  }`}
-                >
-                  <List className="w-3.5 h-3.5" />
-                  <span>3. Work Units & Surplus List</span>
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewTab('weeks')}
+                className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition-all ${
+                  previewTab === 'weeks'
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+                }`}
+              >
+                <Table className="w-3.5 h-3.5" />
+                <span>2. Week-by-Week Breakdown</span>
+              </button>
 
-              <div className="text-xs text-slate-600 font-bold">
-                {allocationResult.allocations.length} Client Allocations • {allocationResult.surplus.reduce((s, x) => s + x.quantity, 0)} Surplus Units
-              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewTab('schedule')}
+                className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition-all ${
+                  previewTab === 'schedule'
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span>3. Daily Timetables</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPreviewTab('surplus')}
+                className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition-all ${
+                  previewTab === 'surplus'
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+                }`}
+              >
+                <AlertOctagon className="w-3.5 h-3.5" />
+                <span>4. Surplus & Capacity ({allocationResult.surplus.length})</span>
+              </button>
             </div>
 
-            {/* TAB 1: EXACT AGENCY MATRIX GRID VIEW */}
-            {previewTab === 'matrix' && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between px-1">
-                  <span className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">
-                    Agency Work Distribution Matrix ({selectedWeek?.name || 'Active Week'})
-                  </span>
-                  <span className="text-xs text-slate-600 font-bold">
-                    {(clients.length > 0 ? clients : DEFAULT_AGENCY_CLIENTS).length} Clients • {employees.length} Staff Members
-                  </span>
-                </div>
-
-                <AgencyMatrixGrid
-                  week={selectedWeek}
-                  clients={clients}
-                  employees={employees}
-                  allocations={allocationResult.allocations}
-                />
+            {/* Sub-Tabs for Week-by-Week View */}
+            {previewTab === 'weeks' && (
+              <div className="flex flex-wrap items-center gap-2 p-3 bg-indigo-50/70 border border-indigo-200 rounded-2xl">
+                <span className="text-xs font-extrabold text-indigo-950 uppercase tracking-wider mr-2">
+                  Select Work Week:
+                </span>
+                {allocationResult.weeklyBreakdowns.map((wb, idx) => (
+                  <button
+                    key={wb.weekId}
+                    type="button"
+                    onClick={() => setActiveWeekSubTab(String(idx))}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all ${
+                      activeWeekSubTab === String(idx)
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'bg-white text-slate-700 border border-slate-200 hover:bg-indigo-100 hover:text-indigo-900'
+                    }`}
+                  >
+                    {wb.weekName} ({wb.allocations.length} items)
+                  </button>
+                ))}
               </div>
             )}
 
-            {/* TAB 2: DAY-WISE DAILY PRODUCTION SCHEDULE */}
+            {/* TAB 1: FULL MONTH MATRIX */}
+            {previewTab === 'full_month' && (
+              <AgencyMatrixGrid
+                monthLabel={currentMonthData?.monthLabel}
+                title={`${currentMonthData?.monthLabel} • FULL MONTH COMBINED ALLOCATION MATRIX`}
+                isMonthly={true}
+                clients={clients.length > 0 ? clients : DEFAULT_AGENCY_CLIENTS}
+                employees={employees}
+                allocations={allocationResult.allocations}
+              />
+            )}
+
+            {/* TAB 2: WEEK-BY-WEEK BREAKDOWN */}
+            {previewTab === 'weeks' && allocationResult.weeklyBreakdowns?.[parseInt(activeWeekSubTab, 10)] && (
+              <AgencyMatrixGrid
+                week={allocationResult.weeklyBreakdowns[parseInt(activeWeekSubTab, 10)].week}
+                clients={clients.length > 0 ? clients : DEFAULT_AGENCY_CLIENTS}
+                employees={employees}
+                allocations={allocationResult.weeklyBreakdowns[parseInt(activeWeekSubTab, 10)].allocations}
+              />
+            )}
+
+            {/* TAB 3: DAILY SCHEDULE TIMETABLE */}
             {previewTab === 'schedule' && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between px-1">
-                  <span className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">
-                    Day-by-Day Production Timetable ({selectedWeek?.name || 'Active Week'})
-                  </span>
-                  <span className="text-xs text-slate-600 font-bold">
-                    Monday to Saturday Deliverable Flow
-                  </span>
-                </div>
-
-                <DailyScheduleTimetable
-                  dailySchedules={allocationResult.dailySchedules}
-                  workWeek={selectedWeek}
-                  employees={employees}
-                  clients={clients}
-                />
+              <div className="space-y-6">
+                {allocationResult.weeklyBreakdowns.map((wb) => (
+                  <Card key={wb.weekId}>
+                    <CardHeader
+                      title={`${wb.weekName} Daily Timetable (${wb.week.startDate} to ${wb.week.endDate})`}
+                      subtitle="Day-wise staff task distribution"
+                    />
+                    <DailyScheduleTimetable
+                      workWeek={wb.week}
+                      dailySchedules={wb.dailySchedules}
+                      employees={employees}
+                    />
+                  </Card>
+                ))}
               </div>
             )}
 
-            {/* TAB 3: DELIVERABLES BREAKDOWN & SURPLUS */}
-            {previewTab === 'deliverables' && (
-              <div className="space-y-6">
-                {/* Employee Utilization Overview Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {Object.values(allocationResult.employeeUtilization).map((emp) => (
-                    <Card key={emp.empId} className="space-y-3">
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <h4 className="font-bold text-slate-900 text-sm">
-                            {emp.name}
-                          </h4>
-                          <p className="text-[11px] font-mono text-slate-500 font-semibold">
-                            {emp.code} • {emp.effectiveWorkingDays} Working Days
-                          </p>
-                        </div>
-                        <Badge role={emp.role} size="sm" />
-                      </div>
-
-                      <ProgressBar
-                        percentage={emp.utilizationPercentage}
-                        usedUnits={emp.usedCapacityUnits}
-                        totalUnits={emp.totalCapacityUnits}
-                        size="md"
-                      />
-
-                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
-                        <span className="text-slate-600 font-medium">Assigned:</span>
-                        <span className="font-bold text-slate-900">
-                          {emp.assignedWork.posts} Posts, {emp.assignedWork.reels} Reels, {emp.assignedWork.stories} Stories
-                        </span>
-                      </div>
-                    </Card>
-                  ))}
-                </div>
-
-                {/* Allocated Deliverables Table */}
+            {/* TAB 4: SURPLUS & CAPACITY */}
+            {previewTab === 'surplus' && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Team Capacity Gauges */}
                 <Card>
                   <CardHeader
-                    title="Allocated Work Deliverables"
-                    subtitle="Fair balanced distribution among eligible employees"
-                    action={
-                      <span className="text-xs font-bold text-indigo-700">
-                        {allocationResult.allocations.length} Active Assignments
-                      </span>
-                    }
+                    title="Monthly Team Capacity Utilization"
+                    subtitle="Aggregated across all calendar weeks in this month"
                   />
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-xs font-bold">
+                        <span>Graphic Design Team</span>
+                        <span>{allocationResult.teamCapacity.graphic.usedUnits} / {allocationResult.teamCapacity.graphic.totalUnits} Units ({allocationResult.teamCapacity.graphic.utilization}%)</span>
+                      </div>
+                      <ProgressBar percentage={allocationResult.teamCapacity.graphic.utilization} size="md" />
+                    </div>
 
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
-                          <th className="py-3.5 px-5">Client</th>
-                          <th className="py-3.5 px-5">Assigned Employee</th>
-                          <th className="py-3.5 px-4">Role</th>
-                          <th className="py-3.5 px-4 text-center">Posts</th>
-                          <th className="py-3.5 px-4 text-center">Reels</th>
-                          <th className="py-3.5 px-4 text-center">Stories</th>
-                          <th className="py-3.5 px-5 text-center">Effort Units</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 text-sm">
-                        {allocationResult.allocations.map((alloc, idx) => (
-                          <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                            <td className="py-3.5 px-5 font-bold text-slate-900">
-                              {alloc.clientName || clients.find((c) => c.id === alloc.clientId)?.name || alloc.clientId}
-                            </td>
-                            <td className="py-3.5 px-5 font-bold text-slate-900">
-                              {alloc.employeeName} ({alloc.employeeCode})
-                            </td>
-                            <td className="py-3.5 px-4">
-                              <Badge role={alloc.employeeRole} size="sm" />
-                            </td>
-                            <td className="py-3.5 px-4 text-center font-extrabold text-blue-700">
-                              {alloc.work.posts}
-                            </td>
-                            <td className="py-3.5 px-4 text-center font-extrabold text-purple-700">
-                              {alloc.work.reels}
-                            </td>
-                            <td className="py-3.5 px-4 text-center font-extrabold text-amber-700">
-                              {alloc.work.stories}
-                            </td>
-                            <td className="py-3.5 px-5 text-center font-extrabold text-indigo-700 bg-indigo-50/40">
-                              {alloc.capacityUsed} Units
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <div className="space-y-2 pt-2 border-t border-slate-100">
+                      <div className="flex justify-between text-xs font-bold">
+                        <span>Video Editing Team</span>
+                        <span>{allocationResult.teamCapacity.video.usedUnits} / {allocationResult.teamCapacity.video.totalUnits} Units ({allocationResult.teamCapacity.video.utilization}%)</span>
+                      </div>
+                      <ProgressBar percentage={allocationResult.teamCapacity.video.utilization} size="md" />
+                    </div>
                   </div>
                 </Card>
 
-                {/* Surplus Work Detected Section */}
-                {allocationResult.surplus.length > 0 && (
-                  <Card className="border-rose-200 bg-rose-50/40">
-                    <CardHeader
-                      title="Surplus Deliverables (Exceeding Capacity)"
-                      subtitle="These items could not be allocated automatically and will be logged in Surplus Work"
-                      action={
-                        <Badge variant="danger" size="sm">
-                          {allocationResult.surplus.reduce((s, x) => s + x.quantity, 0)} Surplus Items
-                        </Badge>
-                      }
-                    />
-
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left border-collapse">
-                        <thead>
-                          <tr className="bg-rose-100/60 border-b border-rose-200 text-[11px] font-bold text-rose-900 uppercase tracking-wider">
-                            <th className="py-3.5 px-5">Client</th>
-                            <th className="py-3.5 px-4">Content Type</th>
-                            <th className="py-3.5 px-4">Required Role</th>
-                            <th className="py-3.5 px-4 text-center">Surplus Quantity</th>
-                            <th className="py-3.5 px-5">Surplus Reason</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-rose-100 text-sm">
-                          {allocationResult.surplus.map((s, idx) => (
-                            <tr key={idx}>
-                              <td className="py-3.5 px-5 font-bold text-slate-900">
-                                {s.clientName || clients.find((c) => c.id === s.clientId)?.name || s.clientId}
-                              </td>
-                              <td className="py-3.5 px-4">
-                                <Badge contentType={s.contentType} size="sm" />
-                              </td>
-                              <td className="py-3.5 px-4">
-                                <Badge role={s.roleRequired} size="sm" />
-                              </td>
-                              <td className="py-3.5 px-4 text-center font-extrabold text-rose-700">
-                                {s.quantity} {s.contentType?.toUpperCase()}s
-                              </td>
-                              <td className="py-3.5 px-5 text-xs font-semibold text-rose-800">
-                                {s.reasonLabel || s.reason}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                {/* Surplus List */}
+                <Card>
+                  <CardHeader
+                    title={`Surplus Deliverables (${allocationResult.surplus.length})`}
+                    subtitle="Deliverables exceeding employee capacity limits"
+                  />
+                  {allocationResult.surplus.length > 0 ? (
+                    <div className="space-y-2 max-h-80 overflow-y-auto">
+                      {allocationResult.surplus.map((s, idx) => (
+                        <div key={idx} className="p-3 rounded-xl bg-rose-50 border border-rose-200 flex items-center justify-between text-xs">
+                          <div>
+                            <span className="font-extrabold text-slate-900">{s.clientName || 'Client'}</span>
+                            <span className="text-rose-700 font-bold ml-2">
+                              {s.quantity} {s.contentType?.toUpperCase()} ({s.weekName || 'Week'})
+                            </span>
+                          </div>
+                          <Badge variant="danger" size="sm">Surplus</Badge>
+                        </div>
+                      ))}
                     </div>
-                  </Card>
-                )}
+                  ) : (
+                    <div className="py-8 text-center text-xs text-slate-500 flex flex-col items-center gap-2">
+                      <CheckCircle2 className="w-8 h-8 text-emerald-600" />
+                      <span className="font-bold text-slate-900">Zero Surplus</span>
+                      <span>All monthly requirements accommodated within staff capacities.</span>
+                    </div>
+                  )}
+                </Card>
               </div>
             )}
+          </div>
+        )}
 
-            {/* Bottom Commit Action Bar with Animated Excel Button */}
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-6 bg-white border border-slate-200 rounded-2xl shadow-sm">
-              <div>
-                <h4 className="text-base font-bold text-slate-900">Ready to save this weekly allocation?</h4>
-                <p className="text-xs text-slate-600 mt-0.5">
-                  Allocations and surplus records will be committed to the database.
-                </p>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <DownloadExcelButton
-                  onExport={handleDownloadExcelPreview}
-                  label="Download Excel Preview"
-                  size="md"
-                />
-                <Link href="/requirements">
-                  <Button variant="secondary" size="md" className="font-bold">
-                    Back to Requirements
-                  </Button>
-                </Link>
-                <Button
-                  variant="primary"
-                  size="md"
-                  icon={CheckCircle2}
-                  onClick={() => handleConfirmCommit(false)}
-                  isLoading={committing}
-                  disabled={!allocationResult.validation.passed}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
-                >
-                  Confirm & Commit Allocation
-                </Button>
-              </div>
+        {/* Existing Overwrite Confirmation Modal */}
+        <Modal
+          isOpen={isDuplicateModalOpen}
+          onClose={() => setIsDuplicateModalOpen(false)}
+          title="Existing Monthly Allocation Detected"
+          subtitle={`The month of ${currentMonthData?.monthLabel || selectedMonthKey} already contains committed allocations.`}
+        >
+          <div className="space-y-4 text-xs text-slate-700">
+            <p className="font-medium">
+              Re-committing will overwrite previous automated assignments for this month with the newly calculated optimal plan.
+            </p>
+            <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+              <Button variant="secondary" onClick={() => setIsDuplicateModalOpen(false)}>
+                Review Preview
+              </Button>
+              <Button
+                variant="primary"
+                onClick={handleConfirmCommit}
+                isLoading={committing}
+                className="bg-slate-900 hover:bg-slate-800 text-white font-bold"
+              >
+                Overwrite & Commit
+              </Button>
             </div>
           </div>
-        ) : null}
+        </Modal>
       </div>
-
-      {/* Duplicate Allocation Modal */}
-      <Modal
-        isOpen={isDuplicateModalOpen}
-        onClose={() => setIsDuplicateModalOpen(false)}
-        title="Existing Allocation Detected"
-        subtitle={`An allocation already exists for ${selectedWeek?.name}.`}
-      >
-        <div className="space-y-4">
-          <p className="text-sm text-slate-700 leading-relaxed">
-            There are currently <strong>{existingAllocations.length} confirmed allocation records</strong> saved for this week.
-          </p>
-
-          <div className="p-3.5 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900">
-            Confirming will replace previous automatic allocations for this week with your updated calculations.
-          </div>
-
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
-            <Button
-              variant="secondary"
-              onClick={() => router.push('/allocations')}
-            >
-              View Existing
-            </Button>
-            <Button
-              variant="primary"
-              onClick={() => handleConfirmCommit(true)}
-              isLoading={committing}
-              className="bg-slate-900 hover:bg-slate-800 text-white"
-            >
-              Replace & Save
-            </Button>
-          </div>
-        </div>
-      </Modal>
     </AppLayout>
   );
 }

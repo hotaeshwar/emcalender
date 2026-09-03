@@ -7,27 +7,67 @@ import {
 } from '@/lib/storageSync';
 import { logAuditAction } from './auditService';
 import { convertTaskToCapacityUnits } from '@/lib/capacityCalculator';
+import { getMonthInfoFromDate } from '@/lib/monthUtils';
 
 const ALLOCATIONS_COLLECTION = 'allocations';
 const SURPLUS_COLLECTION = 'surplusWork';
 
-export function subscribeAllocations(callback, weekId = null) {
+export function subscribeAllocations(callback, filter = null) {
   return subscribeCollection(ALLOCATIONS_COLLECTION, (records) => {
-    if (weekId) {
-      callback(records.filter((a) => a.weekId === weekId));
-    } else {
+    if (!filter || filter === 'all') {
       callback(records);
+      return;
     }
+    if (typeof filter === 'string') {
+      // Could be weekId or monthKey (YYYY-MM)
+      if (filter.includes('-') && filter.length === 7) {
+        callback(records.filter((a) => a.monthKey === filter || (a.date && a.date.startsWith(filter))));
+      } else {
+        callback(records.filter((a) => a.weekId === filter));
+      }
+      return;
+    }
+    if (typeof filter === 'object') {
+      let res = records;
+      if (filter.monthKey && filter.monthKey !== 'all') {
+        res = res.filter((a) => a.monthKey === filter.monthKey || (a.date && a.date.startsWith(filter.monthKey)));
+      }
+      if (filter.weekId && filter.weekId !== 'all') {
+        res = res.filter((a) => a.weekId === filter.weekId);
+      }
+      callback(res);
+      return;
+    }
+    callback(records);
   });
 }
 
-export function subscribeSurplusWork(callback, weekId = null) {
+export function subscribeSurplusWork(callback, filter = null) {
   return subscribeCollection(SURPLUS_COLLECTION, (records) => {
-    if (weekId) {
-      callback(records.filter((s) => s.weekId === weekId));
-    } else {
+    if (!filter || filter === 'all') {
       callback(records);
+      return;
     }
+    if (typeof filter === 'string') {
+      if (filter.includes('-') && filter.length === 7) {
+        callback(records.filter((s) => s.monthKey === filter || (s.date && s.date.startsWith(filter))));
+      } else {
+        callback(records.filter((s) => s.weekId === filter));
+      }
+      return;
+    }
+    if (typeof filter === 'object') {
+      let res = records;
+      if (filter.monthKey && filter.monthKey !== 'all') {
+        res = res.filter((s) => s.monthKey === filter.monthKey || (s.date && s.date.startsWith(filter.monthKey)));
+      }
+      if (filter.weekId && filter.weekId !== 'all') {
+        res = res.filter((s) => s.weekId === filter.weekId);
+      }
+      callback(res);
+      return;
+    }
+    callback(records);
   });
 }
 
@@ -36,8 +76,14 @@ export async function checkExistingAllocations(weekId, clientId = null) {
   return records.filter((a) => a.weekId === weekId && (!clientId || a.clientId === clientId));
 }
 
+export async function checkExistingMonthlyAllocations(monthKey, clientId = null) {
+  const records = await fetchCollection(ALLOCATIONS_COLLECTION);
+  return records.filter((a) => (a.monthKey === monthKey || (a.date && a.date.startsWith(monthKey))) && (!clientId || a.clientId === clientId));
+}
+
 export async function commitWeeklyAllocation({
   weekId,
+  monthKey = null,
   allocations = [],
   surplus = [],
   recalculate = false,
@@ -45,6 +91,9 @@ export async function commitWeeklyAllocation({
   adminId = 'admin'
 }) {
   const clientsList = await fetchCollection('clients');
+  const weeksList = await fetchCollection('workWeeks');
+  const matchedWeek = (weeksList || []).find((w) => w.id === weekId);
+  const derivedMonthKey = monthKey || matchedWeek?.monthKey || (matchedWeek?.startDate ? getMonthInfoFromDate(matchedWeek.startDate).monthKey : null);
 
   // 1. Clean up existing automatic records for this week to prevent duplication
   const existingAlloc = await fetchCollection(ALLOCATIONS_COLLECTION);
@@ -75,6 +124,8 @@ export async function commitWeeklyAllocation({
       employeeCode: alloc.employeeCode || '',
       employeeRole: alloc.employeeRole || '',
       weekId: alloc.weekId || weekId,
+      weekName: alloc.weekName || matchedWeek?.name || '',
+      monthKey: alloc.monthKey || derivedMonthKey,
       date: alloc.date || null,
       work: {
         posts: Number(alloc.work?.posts) || 0,
@@ -95,6 +146,8 @@ export async function commitWeeklyAllocation({
       clientId: s.clientId,
       clientName: s.clientName || matchedClient?.name || '',
       weekId: s.weekId || weekId,
+      weekName: s.weekName || matchedWeek?.name || '',
+      monthKey: s.monthKey || derivedMonthKey,
       contentType: s.contentType,
       roleRequired: s.roleRequired,
       quantity: Number(s.quantity) || 0,
@@ -110,13 +163,13 @@ export async function commitWeeklyAllocation({
     action: recalculate ? 'ALLOCATION_RECALCULATED' : 'AUTO_ALLOCATION_CREATED',
     entityType: 'allocation',
     entityId: weekId,
-    description: `Committed allocation for week ${weekId}: ${allocations.length} records, ${surplus.length} surplus items`,
+    description: `Committed ${allocations.length} allocations and ${surplus.length} surplus items for week ${matchedWeek?.name || weekId} (${derivedMonthKey || ''})`,
     adminId,
   });
 
   return {
     success: true,
-    allocationCount: allocations.length,
+    allocatedCount: allocations.length,
     surplusCount: surplus.length,
   };
 }
@@ -328,6 +381,138 @@ export async function clearWeeklyAllocations({
     entityType: 'allocation',
     entityId: weekId || 'all',
     description: `Cleared ${deletedAllocCount} allocations and ${deletedSurplusCount} surplus records for week ${weekId || 'all'}`,
+    adminId,
+  });
+
+  return {
+    success: true,
+    deletedAllocCount,
+    deletedSurplusCount,
+  };
+}
+
+export async function commitMonthlyAllocation({
+  monthKey,
+  allocations = [],
+  surplus = [],
+  adminId = 'admin'
+}) {
+  const clientsList = await fetchCollection('clients');
+  const weeksList = await fetchCollection('workWeeks');
+
+  // 1. Clean up existing records for this month
+  const existingAlloc = await fetchCollection(ALLOCATIONS_COLLECTION);
+  const existingSurplus = await fetchCollection(SURPLUS_COLLECTION);
+
+  for (const a of existingAlloc) {
+    if (a.monthKey === monthKey || (a.date && a.date.startsWith(monthKey))) {
+      await removeDocument(ALLOCATIONS_COLLECTION, a.id);
+    }
+  }
+
+  for (const s of existingSurplus) {
+    if (s.monthKey === monthKey || (s.date && s.date.startsWith(monthKey))) {
+      await removeDocument(SURPLUS_COLLECTION, s.id);
+    }
+  }
+
+  // 2. Commit all allocations
+  for (const alloc of allocations) {
+    const matchedClient = (clientsList || []).find((c) => c.id === alloc.clientId);
+    const matchedWeek = (weeksList || []).find((w) => w.id === alloc.weekId);
+    const clientName = alloc.clientName || matchedClient?.name || '';
+
+    await saveDocument(ALLOCATIONS_COLLECTION, {
+      clientId: alloc.clientId,
+      clientName: clientName,
+      employeeId: alloc.employeeId,
+      employeeName: alloc.employeeName || '',
+      employeeCode: alloc.employeeCode || '',
+      employeeRole: alloc.employeeRole || '',
+      weekId: alloc.weekId,
+      weekName: alloc.weekName || matchedWeek?.name || '',
+      monthKey: alloc.monthKey || monthKey,
+      date: alloc.date || null,
+      work: {
+        posts: Number(alloc.work?.posts) || 0,
+        reels: Number(alloc.work?.reels) || 0,
+        stories: Number(alloc.work?.stories) || 0,
+      },
+      capacityUsed: Number(alloc.capacityUsed) || 0,
+      assignmentType: alloc.assignmentType || 'automatic',
+      manualOverride: Boolean(alloc.manualOverride),
+      overrideReason: alloc.overrideReason || '',
+    });
+  }
+
+  // 3. Commit all surplus
+  for (const s of surplus) {
+    const matchedClient = (clientsList || []).find((c) => c.id === s.clientId);
+    const matchedWeek = (weeksList || []).find((w) => w.id === s.weekId);
+
+    await saveDocument(SURPLUS_COLLECTION, {
+      clientId: s.clientId,
+      clientName: s.clientName || matchedClient?.name || '',
+      weekId: s.weekId,
+      weekName: s.weekName || matchedWeek?.name || '',
+      monthKey: s.monthKey || monthKey,
+      contentType: s.contentType,
+      roleRequired: s.roleRequired,
+      quantity: Number(s.quantity) || 0,
+      reason: s.reason,
+      reasonLabel: s.reasonLabel || s.reason,
+      status: s.status || 'unassigned',
+      assignedToEmployeeId: null,
+      taskDisplayName: s.taskDisplayName || '',
+    });
+  }
+
+  await logAuditAction({
+    action: 'MONTHLY_ALLOCATION_COMMITTED',
+    entityType: 'allocation',
+    entityId: monthKey,
+    description: `Committed full month allocation for ${monthKey}: ${allocations.length} records, ${surplus.length} surplus items`,
+    adminId,
+  });
+
+  return {
+    success: true,
+    allocatedCount: allocations.length,
+    surplusCount: surplus.length,
+  };
+}
+
+export async function clearMonthlyAllocations({
+  monthKey,
+  clearSurplus = true,
+  adminId = 'admin'
+}) {
+  const existingAlloc = await fetchCollection(ALLOCATIONS_COLLECTION);
+  let deletedAllocCount = 0;
+
+  for (const a of existingAlloc) {
+    if (!monthKey || monthKey === 'all' || a.monthKey === monthKey || (a.date && a.date.startsWith(monthKey))) {
+      await removeDocument(ALLOCATIONS_COLLECTION, a.id);
+      deletedAllocCount++;
+    }
+  }
+
+  let deletedSurplusCount = 0;
+  if (clearSurplus) {
+    const existingSurplus = await fetchCollection(SURPLUS_COLLECTION);
+    for (const s of existingSurplus) {
+      if (!monthKey || monthKey === 'all' || s.monthKey === monthKey || (s.date && s.date.startsWith(monthKey))) {
+        await removeDocument(SURPLUS_COLLECTION, s.id);
+        deletedSurplusCount++;
+      }
+    }
+  }
+
+  await logAuditAction({
+    action: 'MONTHLY_ALLOCATIONS_CLEARED',
+    entityType: 'allocation',
+    entityId: monthKey || 'all',
+    description: `Cleared ${deletedAllocCount} allocations and ${deletedSurplusCount} surplus records for month ${monthKey || 'all'}`,
     adminId,
   });
 

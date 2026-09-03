@@ -6,7 +6,7 @@
     "dev": "node node_modules/next/dist/bin/next dev",
     "build": "node node_modules/next/dist/bin/next build",
     "start": "node node_modules/next/dist/bin/next start",
-    "test": "node tests/allocationEngine.test.js"
+    "test": "node tests/allocationEngine.test.js && node tests/monthWiseAllocation.test.js"
   },
   "dependencies": {
     "clsx": "^2.1.1",

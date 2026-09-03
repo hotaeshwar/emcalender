@@ -17,6 +17,7 @@ import { subscribeEmployees } from '@/services/employeeService';
 import { subscribeCapacityRules } from '@/services/capacityService';
 import { buildDailyTimetable } from '@/lib/allocationEngine';
 import { exportAllocationReport } from '@/lib/exportExcel';
+import { groupWeeksByMonth, getActiveMonth } from '@/lib/monthUtils';
 import { useToast } from '@/contexts/ToastContext';
 import {
   History,
@@ -29,16 +30,19 @@ import {
   CheckCircle2,
   FileSpreadsheet,
   Search,
-  RotateCcw
+  RotateCcw,
+  Layers
 } from 'lucide-react';
 import { ROLES, ROLE_OPTIONS } from '@/lib/constants';
 
 export default function HistoryPage() {
   const [allocations, setAllocations] = useState([]);
   const [weeks, setWeeks] = useState([]);
+  const [months, setMonths] = useState([]);
   const [clients, setClients] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [capacityRules, setCapacityRules] = useState([]);
+  const [selectedMonthKey, setSelectedMonthKey] = useState('all');
   const [selectedWeekId, setSelectedWeekId] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState('all');
@@ -50,6 +54,8 @@ export default function HistoryPage() {
   useEffect(() => {
     const unsubWeeks = subscribeWorkWeeks((data) => {
       setWeeks(data || []);
+      const grouped = groupWeeksByMonth(data || []);
+      setMonths(grouped);
     });
 
     const unsubClients = subscribeClients(setClients);
@@ -70,7 +76,15 @@ export default function HistoryPage() {
     };
   }, []);
 
+  const currentMonthData = months.find((m) => m.monthKey === selectedMonthKey);
+  const monthWeeks = currentMonthData?.weeks || weeks;
+
   const filteredAllocations = allocations.filter((a) => {
+    if (selectedMonthKey !== 'all') {
+      const matchMonth = a.monthKey === selectedMonthKey || (a.date && a.date.startsWith(selectedMonthKey)) ||
+                         monthWeeks.some(w => w.id === a.weekId || w.name === a.weekName);
+      if (!matchMonth) return false;
+    }
     if (selectedWeekId && selectedWeekId !== 'all') {
       const matchWeek = a.weekId === selectedWeekId || (a.weekName && a.weekName === selectedWeekId);
       if (!matchWeek) return false;
@@ -100,7 +114,9 @@ export default function HistoryPage() {
     }
 
     exportAllocationReport({
-      week: currentWeek,
+      week: selectedWeekId !== 'all' ? currentWeek : { name: currentMonthData?.monthLabel || 'All Months' },
+      monthLabel: currentMonthData?.monthLabel,
+      isMonthly: selectedWeekId === 'all',
       allocations: filteredAllocations,
       surplus: [],
       clients,
@@ -112,22 +128,42 @@ export default function HistoryPage() {
   return (
     <AppLayout
       title="Allocation History & Timetables"
-      subtitle="Historical audit of committed allocations with expandable daily item distribution timetables"
+      subtitle="Historical audit of committed allocations with Month-Wise and Week-Wise daily item distribution timetables"
     >
       <div className="space-y-6 bg-white">
         {/* Controls Bar with Animated Download Button */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-4 rounded-2xl bg-white border border-slate-200 shadow-sm">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4 p-4 rounded-2xl bg-white border border-slate-200 shadow-sm">
+          <div className="flex flex-wrap items-center gap-3">
             <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-              Select Work Week:
+              Filter by Month:
             </span>
-            <div className="w-64">
+            <div className="w-56">
+              <Select
+                value={selectedMonthKey}
+                onChange={(e) => {
+                  setSelectedMonthKey(e.target.value);
+                  setSelectedWeekId('all');
+                }}
+                options={[
+                  { value: 'all', label: 'All Months' },
+                  ...months.map((m) => ({
+                    value: m.monthKey,
+                    label: `${m.monthLabel} (${m.weeks.length} Wks)`,
+                  })),
+                ]}
+              />
+            </div>
+
+            <span className="text-xs font-bold text-slate-700 uppercase tracking-wider ml-2">
+              Work Week:
+            </span>
+            <div className="w-56">
               <Select
                 value={selectedWeekId}
                 onChange={(e) => setSelectedWeekId(e.target.value)}
                 options={[
-                  { value: 'all', label: 'All Work Weeks' },
-                  ...weeks.map((w) => ({
+                  { value: 'all', label: selectedMonthKey !== 'all' ? 'All Weeks in Month' : 'All Work Weeks' },
+                  ...monthWeeks.map((w) => ({
                     value: w.id,
                     label: `${w.name} (${w.startDate})`,
                   })),

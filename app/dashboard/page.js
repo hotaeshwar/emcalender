@@ -67,19 +67,20 @@ const INITIAL_DATA = {
 
 export default function DashboardPage() {
   const [data, setData] = useState(INITIAL_DATA);
-  const [weeks, setWeeks] = useState([]);
-  const [selectedWeekId, setSelectedWeekId] = useState('');
+  const [months, setMonths] = useState([]);
+  const [selectedMonthKey, setSelectedMonthKey] = useState('');
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
   const { success, error } = useToast();
 
-  const loadData = async (targetWeekId = null) => {
+  const loadData = async (targetMonthKey = null) => {
     try {
-      const res = await getDashboardData(targetWeekId || selectedWeekId);
+      const res = await getDashboardData(targetMonthKey || selectedMonthKey);
       if (res) {
         setData(res);
-        if (!selectedWeekId && res.activeWeek) {
-          setSelectedWeekId(res.activeWeek.id);
+        setMonths(res.monthsList || []);
+        if (!selectedMonthKey && res.activeMonth) {
+          setSelectedMonthKey(res.activeMonth.monthKey);
         }
       }
     } catch (err) {
@@ -90,25 +91,22 @@ export default function DashboardPage() {
   };
 
   useEffect(() => {
-    // Initial fetch
-    loadData(selectedWeekId);
+    loadData(selectedMonthKey);
 
-    // Setup real-time listeners for live synchronization
-    const unsubWeeks = subscribeWorkWeeks((wks) => {
-      setWeeks(wks || []);
-      loadData(selectedWeekId);
+    const unsubWeeks = subscribeWorkWeeks(() => {
+      loadData(selectedMonthKey);
     });
     const unsubAllocations = subscribeAllocations(() => {
-      loadData(selectedWeekId);
+      loadData(selectedMonthKey);
     });
     const unsubSurplus = subscribeSurplusWork(() => {
-      loadData(selectedWeekId);
+      loadData(selectedMonthKey);
     });
     const unsubEmployees = subscribeEmployees(() => {
-      loadData(selectedWeekId);
+      loadData(selectedMonthKey);
     });
     const unsubClients = subscribeClients(() => {
-      loadData(selectedWeekId);
+      loadData(selectedMonthKey);
     });
 
     return () => {
@@ -118,11 +116,11 @@ export default function DashboardPage() {
       if (unsubEmployees) unsubEmployees();
       if (unsubClients) unsubClients();
     };
-  }, [selectedWeekId]);
+  }, [selectedMonthKey]);
 
-  const handleWeekChange = (newWeekId) => {
-    setSelectedWeekId(newWeekId);
-    loadData(newWeekId);
+  const handleMonthChange = (newMonthKey) => {
+    setSelectedMonthKey(newMonthKey);
+    loadData(newMonthKey);
   };
 
   const handleSeedRules = async () => {
@@ -130,7 +128,7 @@ export default function DashboardPage() {
     try {
       await seedDefaultCapacityRules();
       success('Default capacity rules have been seeded successfully!', 'Rules Initialized');
-      loadData(selectedWeekId);
+      loadData(selectedMonthKey);
     } catch (err) {
       console.error(err);
       error('Failed to seed capacity rules.', 'Error');
@@ -141,20 +139,21 @@ export default function DashboardPage() {
 
   const handleExportSummaryExcel = () => {
     const summaryRows = [
+      { Metric: 'Active Month', Value: data?.activeMonth?.monthLabel || 'All Months', Category: 'Period' },
       { Metric: 'Active Clients', Value: stats.activeClients, Category: 'Clients' },
       { Metric: 'Total Clients', Value: stats.totalClients, Category: 'Clients' },
       { Metric: 'Active Graphic Designers', Value: stats.graphicDesignersCount, Category: 'Team' },
       { Metric: 'Active Video Editors', Value: stats.videoEditorsCount, Category: 'Team' },
-      { Metric: 'Graphic Team Utilization (%)', Value: `${teamCapacity.graphic?.utilization || 0}%`, Category: 'Capacity' },
-      { Metric: 'Graphic Team Units (Used / Total)', Value: `${teamCapacity.graphic?.usedUnits || 0} / ${teamCapacity.graphic?.totalUnits || 0}`, Category: 'Capacity' },
-      { Metric: 'Video Team Utilization (%)', Value: `${teamCapacity.video?.utilization || 0}%`, Category: 'Capacity' },
-      { Metric: 'Video Team Units (Used / Total)', Value: `${teamCapacity.video?.usedUnits || 0} / ${teamCapacity.video?.totalUnits || 0}`, Category: 'Capacity' },
-      { Metric: 'Allocated Posts', Value: stats.totalAllocatedPosts, Category: 'Deliverables' },
-      { Metric: 'Allocated Reels', Value: stats.totalAllocatedReels, Category: 'Deliverables' },
-      { Metric: 'Allocated Stories', Value: stats.totalAllocatedStories, Category: 'Deliverables' },
-      { Metric: 'Unassigned Surplus Deliverables', Value: stats.totalSurplusCount, Category: 'Surplus' },
+      { Metric: 'Monthly Graphic Utilization (%)', Value: `${teamCapacity.graphic?.utilization || 0}%`, Category: 'Capacity' },
+      { Metric: 'Monthly Graphic Units (Used / Total)', Value: `${teamCapacity.graphic?.usedUnits || 0} / ${teamCapacity.graphic?.totalUnits || 0}`, Category: 'Capacity' },
+      { Metric: 'Monthly Video Utilization (%)', Value: `${teamCapacity.video?.utilization || 0}%`, Category: 'Capacity' },
+      { Metric: 'Monthly Video Units (Used / Total)', Value: `${teamCapacity.video?.usedUnits || 0} / ${teamCapacity.video?.totalUnits || 0}`, Category: 'Capacity' },
+      { Metric: 'Monthly Allocated Posts', Value: stats.totalAllocatedPosts, Category: 'Deliverables' },
+      { Metric: 'Monthly Allocated Reels', Value: stats.totalAllocatedReels, Category: 'Deliverables' },
+      { Metric: 'Monthly Allocated Stories', Value: stats.totalAllocatedStories, Category: 'Deliverables' },
+      { Metric: 'Monthly Surplus Deliverables', Value: stats.totalSurplusCount, Category: 'Surplus' },
     ];
-    exportToCSV('Bid_Employee_Work_Distributer_Summary', summaryRows);
+    exportToCSV(`Bid_Work_Distributer_${data?.activeMonth?.monthLabel || 'Summary'}`, summaryRows);
     success('Color-coded Excel summary report downloaded successfully!');
   };
 
@@ -164,36 +163,36 @@ export default function DashboardPage() {
   return (
     <AppLayout
       title="Agency Operations Dashboard"
-      subtitle="Real-time capacity tracking, team utilization, and work distribution metrics"
+      subtitle="Real-time capacity tracking, team utilization, and Month-Wise work distribution metrics"
     >
       <div className="space-y-6 animate-fade-in bg-white">
-        {/* Top Clean White Banner with Week Selector */}
+        {/* Top Clean White Banner with Month Selector */}
         <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm relative overflow-hidden flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
           <div className="space-y-2 z-10 max-w-xl">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 text-indigo-800 text-xs font-bold border border-indigo-200">
               <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-              <span>Deterministic Work Allocation Active</span>
+              <span>Month-Level Deterministic Engine Active</span>
             </div>
             <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
               Welcome to Bid employee work distributer
             </h2>
             <p className="text-sm text-slate-700 font-medium leading-relaxed">
-              {data?.activeWeek
-                ? `Viewing capacity metrics for ${data.activeWeek.name} (${data.activeWeek.startDate} to ${data.activeWeek.endDate}) with ${data.activeWeek.calculatedWorkingDays || 5} effective working days.`
-                : 'Start by setting up your work weeks, client requirements, and capacity rules.'}
+              {data?.activeMonth
+                ? `Viewing aggregated monthly metrics for ${data.activeMonth.monthLabel} (${data.activeMonth.weeks.length} calendar weeks, ${data.activeMonth.totalCalculatedWorkingDays} effective working days).`
+                : 'Start by setting up your calendar work weeks, client requirements, and capacity rules.'}
             </p>
           </div>
 
           <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3 z-10 w-full lg:w-auto">
-            {/* Week Selector */}
-            <div className="w-full sm:w-60">
+            {/* Month Selector */}
+            <div className="w-full sm:w-64">
               <Select
-                label="Target Work Week"
-                value={selectedWeekId || data?.activeWeek?.id || ''}
-                onChange={(e) => handleWeekChange(e.target.value)}
-                options={weeks.map((w) => ({
-                  value: w.id,
-                  label: `${w.name} (${w.startDate})`,
+                label="Target Operational Month"
+                value={selectedMonthKey || data?.activeMonth?.monthKey || ''}
+                onChange={(e) => handleMonthChange(e.target.value)}
+                options={(months.length > 0 ? months : data?.monthsList || []).map((m) => ({
+                  value: m.monthKey,
+                  label: `${m.monthLabel} (${m.weeks.length} Weeks)`,
                 }))}
               />
             </div>
@@ -206,7 +205,7 @@ export default function DashboardPage() {
               />
               <Link href="/allocations/new">
                 <Button variant="primary" size="md" icon={Sparkles} className="bg-slate-900 hover:bg-slate-800 text-white font-bold shadow-sm">
-                  Auto Allocate Work
+                  Generate Month Allocation
                 </Button>
               </Link>
             </div>

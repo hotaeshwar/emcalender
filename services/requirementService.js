@@ -6,28 +6,56 @@ import {
   removeDocument
 } from '@/lib/storageSync';
 import { logAuditAction } from './auditService';
+import { getWeeksByMonth } from './weekService';
 
 const COLLECTION_NAME = 'workRequirements';
 
-export function subscribeWorkRequirements(callback, weekId = null) {
+export function subscribeWorkRequirements(callback, filter = null) {
   return subscribeCollection(COLLECTION_NAME, (reqs) => {
-    if (weekId) {
-      callback(reqs.filter((r) => r.weekId === weekId));
-    } else {
+    if (!filter || filter === 'all') {
       callback(reqs);
+      return;
     }
+    if (typeof filter === 'string') {
+      callback(reqs.filter((r) => r.weekId === filter || r.monthKey === filter));
+      return;
+    }
+    if (typeof filter === 'object') {
+      let res = reqs;
+      if (filter.monthKey && filter.monthKey !== 'all') {
+        res = res.filter((r) => r.monthKey === filter.monthKey);
+      }
+      if (filter.weekId && filter.weekId !== 'all') {
+        res = res.filter((r) => r.weekId === filter.weekId);
+      }
+      callback(res);
+      return;
+    }
+    callback(reqs);
   });
 }
 
-export async function getWorkRequirements(weekId = null) {
+export async function getWorkRequirements(filter = null) {
   const reqs = await fetchCollection(COLLECTION_NAME);
-  return weekId ? reqs.filter((r) => r.weekId === weekId) : reqs;
+  if (!filter || filter === 'all') return reqs;
+  if (typeof filter === 'string') {
+    return reqs.filter((r) => r.weekId === filter || r.monthKey === filter);
+  }
+  let res = reqs;
+  if (filter.monthKey && filter.monthKey !== 'all') {
+    res = res.filter((r) => r.monthKey === filter.monthKey);
+  }
+  if (filter.weekId && filter.weekId !== 'all') {
+    res = res.filter((r) => r.weekId === filter.weekId);
+  }
+  return res;
 }
 
 export async function createWorkRequirement(data, adminId = 'admin') {
   const payload = {
     clientId: data.clientId,
     weekId: data.weekId,
+    monthKey: data.monthKey || '',
     clientName: data.clientName || '',
     requirements: {
       posts: Number(data.requirements?.posts) || 0,
@@ -54,6 +82,7 @@ export async function updateWorkRequirement(id, data, adminId = 'admin') {
   const payload = {
     clientId: data.clientId,
     weekId: data.weekId,
+    monthKey: data.monthKey || '',
     clientName: data.clientName || '',
     requirements: {
       posts: Number(data.requirements?.posts) || 0,
@@ -149,4 +178,77 @@ export async function copyRequirementsBetweenWeeks({
   });
 
   return { success: true, copiedCount };
+}
+
+export async function copyRequirementsBetweenMonths({
+  sourceMonthKey,
+  targetMonthKey,
+  overwrite = true,
+  adminId = 'admin'
+}) {
+  if (!sourceMonthKey || !targetMonthKey) {
+    throw new Error('Please select both a source month and target month.');
+  }
+  if (sourceMonthKey === targetMonthKey) {
+    throw new Error('Source and Target months must be different.');
+  }
+
+  const sourceWeeks = await getWeeksByMonth(sourceMonthKey);
+  const targetWeeks = await getWeeksByMonth(targetMonthKey);
+
+  if (sourceWeeks.length === 0) {
+    throw new Error(`No work weeks configured for source month (${sourceMonthKey}).`);
+  }
+  if (targetWeeks.length === 0) {
+    throw new Error(`No work weeks configured for target month (${targetMonthKey}).`);
+  }
+
+  const allReqs = await fetchCollection(COLLECTION_NAME);
+  let totalCopied = 0;
+
+  // Map each week in target month to corresponding week index in source month
+  for (let i = 0; i < targetWeeks.length; i++) {
+    const targetWk = targetWeeks[i];
+    const sourceWk = sourceWeeks[i] || sourceWeeks[sourceWeeks.length - 1]; // fallback to last week if target has more weeks
+
+    const srcWkReqs = allReqs.filter((r) => r.weekId === sourceWk.id);
+    const trgWkReqs = allReqs.filter((r) => r.weekId === targetWk.id);
+
+    if (overwrite) {
+      for (const tr of trgWkReqs) {
+        await removeDocument(COLLECTION_NAME, tr.id);
+      }
+    }
+
+    for (const sr of srcWkReqs) {
+      if (!overwrite && trgWkReqs.some((tr) => tr.clientId === sr.clientId)) {
+        continue;
+      }
+
+      await saveDocument(COLLECTION_NAME, {
+        clientId: sr.clientId,
+        clientName: sr.clientName || '',
+        weekId: targetWk.id,
+        monthKey: targetMonthKey,
+        requirements: {
+          posts: Number(sr.requirements?.posts) || 0,
+          reels: Number(sr.requirements?.reels) || 0,
+          stories: Number(sr.requirements?.stories) || 0,
+        },
+        notes: sr.notes || '',
+        status: 'submitted',
+      });
+      totalCopied++;
+    }
+  }
+
+  await logAuditAction({
+    action: 'MONTHLY_REQUIREMENTS_COPIED',
+    entityType: 'requirement',
+    entityId: targetMonthKey,
+    description: `Copied ${totalCopied} client requirements from month ${sourceMonthKey} to month ${targetMonthKey}`,
+    adminId,
+  });
+
+  return { success: true, copiedCount: totalCopied };
 }
