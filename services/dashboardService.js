@@ -75,25 +75,39 @@ export async function getDashboardData(targetMonthKey = null) {
     const videoEditors = activeEmployees.filter(e => e.role === ROLES.VIDEO_EDITOR);
 
     const monthsList = groupWeeksByMonth(weeks || []);
+    let activeWeek = null;
     let activeMonth = null;
+    let targetWeeks = [];
 
-    if (targetMonthKey && targetMonthKey !== 'all') {
-      activeMonth = monthsList.find((m) => m.monthKey === targetMonthKey) || null;
-    }
-    if (!activeMonth) {
-      activeMonth = getActiveMonth(weeks || []) || monthsList[0] || null;
+    // Check if targetPeriod is a specific weekId
+    const matchedWeek = (weeks || []).find((w) => w.id === targetMonthKey);
+    if (matchedWeek) {
+      activeWeek = matchedWeek;
+      targetWeeks = [matchedWeek];
+      activeMonth = monthsList.find((m) => m.weeks.some((w) => w.id === matchedWeek.id)) || null;
+    } else {
+      if (targetMonthKey && targetMonthKey !== 'all') {
+        activeMonth = monthsList.find((m) => m.monthKey === targetMonthKey) || null;
+      }
+      if (!activeMonth) {
+        activeMonth = getActiveMonth(weeks || []) || monthsList[0] || null;
+      }
+      targetWeeks = activeMonth ? activeMonth.weeks : (weeks || []);
+      activeWeek = targetWeeks[0] || (weeks || [])[0] || null;
     }
 
     const currentMonthKey = activeMonth?.monthKey || (weeks[0] ? getMonthInfoFromDate(weeks[0].startDate).monthKey : null);
-    const targetWeeks = activeMonth ? activeMonth.weeks : (weeks || []);
 
     let graphicTeamTotalCap = 0;
     let graphicTeamUsedCap = 0;
     let videoTeamTotalCap = 0;
     let videoTeamUsedCap = 0;
 
-    // Filter allocations for the active month or its weeks
+    // Filter allocations for the target period
     const monthAllocations = (allocations || []).filter(a => {
+      if (activeWeek && targetWeeks.length === 1) {
+        return a.weekId === activeWeek.id || a.weekName === activeWeek.name;
+      }
       if (currentMonthKey && (a.monthKey === currentMonthKey || (a.date && a.date.startsWith(currentMonthKey)))) {
         return true;
       }
