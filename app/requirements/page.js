@@ -18,7 +18,8 @@ import {
   subscribeWorkRequirements,
   createWorkRequirement,
   updateWorkRequirement,
-  deleteWorkRequirement
+  deleteWorkRequirement,
+  copyRequirementsBetweenWeeks
 } from '@/services/requirementService';
 import { subscribeClients } from '@/services/clientService';
 import { subscribeWorkWeeks } from '@/services/weekService';
@@ -64,6 +65,15 @@ export default function RequirementsPage() {
   // Delete State
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Copy Week Modal State
+  const [isCopyModalOpen, setIsCopyModalOpen] = useState(false);
+  const [copyData, setCopyData] = useState({
+    sourceWeekId: '',
+    targetWeekId: '',
+    overwrite: true,
+  });
+  const [isCopying, setIsCopying] = useState(false);
 
   const { success, error, warning } = useToast();
 
@@ -176,6 +186,45 @@ export default function RequirementsPage() {
     }
   };
 
+  const openCopyModal = (prefilledSourceId = null) => {
+    const src = prefilledSourceId || (selectedWeekFilter !== 'all' ? selectedWeekFilter : (weeks[0]?.id || ''));
+    const remainingWeeks = weeks.filter((w) => w.id !== src);
+    const target = remainingWeeks[0]?.id || '';
+
+    setCopyData({
+      sourceWeekId: src,
+      targetWeekId: target,
+      overwrite: true,
+    });
+    setIsCopyModalOpen(true);
+  };
+
+  const handleCopy = async (e) => {
+    e.preventDefault();
+    if (!copyData.sourceWeekId || !copyData.targetWeekId) {
+      error('Please select both a Source Week and Target Week.');
+      return;
+    }
+    if (copyData.sourceWeekId === copyData.targetWeekId) {
+      error('Source Week and Target Week must be different.');
+      return;
+    }
+
+    setIsCopying(true);
+    try {
+      const res = await copyRequirementsBetweenWeeks(copyData);
+      const targetWk = weeks.find((w) => w.id === copyData.targetWeekId);
+      success(`Successfully copied ${res.copiedCount} client deliverables to ${targetWk?.name || 'Target Week'}!`, 'Week Copied');
+      setIsCopyModalOpen(false);
+      setSelectedWeekFilter(copyData.targetWeekId);
+    } catch (err) {
+      console.error(err);
+      error(err.message || 'Failed to copy requirements.');
+    } finally {
+      setIsCopying(false);
+    }
+  };
+
   const filteredRequirements = requirements.filter((r) => {
     if (selectedWeekFilter !== 'all' && r.weekId !== selectedWeekFilter) return false;
     if (clientFilter !== 'all' && r.clientId !== clientFilter) return false;
@@ -210,6 +259,17 @@ export default function RequirementsPage() {
                 ]}
               />
             </div>
+
+            {/* Quick Copy Action from selected week */}
+            <Button
+              variant="secondary"
+              icon={Copy}
+              onClick={() => openCopyModal(selectedWeekFilter !== 'all' ? selectedWeekFilter : null)}
+              disabled={weeks.length < 2 || requirements.length === 0}
+              className="text-slate-700 hover:text-slate-900 border-slate-300 font-semibold"
+            >
+              Copy Week Requirements
+            </Button>
           </div>
 
           <Button
@@ -498,6 +558,112 @@ export default function RequirementsPage() {
         confirmText="Delete Requirement"
         isLoading={isDeleting}
       />
+
+      {/* Copy Week Requirements Modal */}
+      {isCopyModalOpen && (
+        <Modal
+          isOpen={isCopyModalOpen}
+          onClose={() => !isCopying && setIsCopyModalOpen(false)}
+          title="Copy Week Requirements"
+          subtitle="Clone all client deliverables from one work week into another work week"
+        >
+          <form onSubmit={handleCopy} className="space-y-4">
+            <Select
+              label="Source Work Week (Copy From)"
+              value={copyData.sourceWeekId}
+              onChange={(e) => setCopyData({ ...copyData, sourceWeekId: e.target.value })}
+              options={[
+                { value: '', label: '-- Choose Source Week --' },
+                ...weeks.map((w) => {
+                  const count = requirements.filter((r) => r.weekId === w.id).length;
+                  return {
+                    value: w.id,
+                    label: `${w.name} (${w.startDate}) • ${count} Client Deliverables`,
+                  };
+                }),
+              ]}
+              required
+            />
+
+            <Select
+              label="Target Work Week (Copy To)"
+              value={copyData.targetWeekId}
+              onChange={(e) => setCopyData({ ...copyData, targetWeekId: e.target.value })}
+              options={[
+                { value: '', label: '-- Choose Target Week --' },
+                ...weeks
+                  .filter((w) => w.id !== copyData.sourceWeekId)
+                  .map((w) => {
+                    const count = requirements.filter((r) => r.weekId === w.id).length;
+                    return {
+                      value: w.id,
+                      label: `${w.name} (${w.startDate}) • currently ${count} items`,
+                    };
+                  }),
+              ]}
+              required
+            />
+
+            {/* Info Preview */}
+            {copyData.sourceWeekId && (
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1.5">
+                <div className="flex justify-between font-medium text-slate-700">
+                  <span>Source Deliverables:</span>
+                  <span className="font-extrabold text-slate-900">
+                    {requirements.filter((r) => r.weekId === copyData.sourceWeekId).length} Client Requirements
+                  </span>
+                </div>
+                {copyData.targetWeekId && (
+                  <div className="flex justify-between font-medium text-slate-700">
+                    <span>Target Week Current Items:</span>
+                    <span className="font-bold text-slate-700">
+                      {requirements.filter((r) => r.weekId === copyData.targetWeekId).length} Existing Items
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Overwrite Toggle */}
+            <div className="p-3.5 rounded-xl bg-indigo-50/70 border border-indigo-200">
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={copyData.overwrite}
+                  onChange={(e) => setCopyData({ ...copyData, overwrite: e.target.checked })}
+                  className="mt-0.5 rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <div>
+                  <span className="text-xs text-indigo-950 font-bold block">
+                    Overwrite existing deliverables in target week
+                  </span>
+                  <span className="text-[11px] text-indigo-800 block mt-0.5 leading-relaxed">
+                    If checked, existing requirements in the target week will be replaced with the cloned source requirements. If unchecked, existing client entries are preserved.
+                  </span>
+                </div>
+              </label>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+              <Button
+                variant="secondary"
+                onClick={() => setIsCopyModalOpen(false)}
+                disabled={isCopying}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                variant="primary"
+                isLoading={isCopying}
+                className="bg-slate-900 hover:bg-slate-800 text-white font-bold"
+              >
+                Copy & Apply Deliverables
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </AppLayout>
   );
 }

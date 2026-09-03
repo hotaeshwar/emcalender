@@ -88,3 +88,65 @@ export async function deleteWorkRequirement(id, clientName, adminId = 'admin') {
 
   return { success: true };
 }
+
+export async function copyRequirementsBetweenWeeks({
+  sourceWeekId,
+  targetWeekId,
+  overwrite = true,
+  adminId = 'admin'
+}) {
+  if (!sourceWeekId || !targetWeekId) {
+    throw new Error('Please select both a source week and a target week.');
+  }
+  if (sourceWeekId === targetWeekId) {
+    throw new Error('Source and Target work weeks must be different.');
+  }
+
+  const allReqs = await fetchCollection(COLLECTION_NAME);
+  const sourceReqs = allReqs.filter((r) => r.weekId === sourceWeekId);
+
+  if (sourceReqs.length === 0) {
+    throw new Error('No client requirements found in the selected source week.');
+  }
+
+  const targetReqs = allReqs.filter((r) => r.weekId === targetWeekId);
+
+  // If overwrite is selected, clear existing requirements in the target week
+  if (overwrite) {
+    for (const tr of targetReqs) {
+      await removeDocument(COLLECTION_NAME, tr.id);
+    }
+  }
+
+  let copiedCount = 0;
+  for (const sr of sourceReqs) {
+    // If not overwriting, skip clients that already have entries in target week
+    if (!overwrite && targetReqs.some((tr) => tr.clientId === sr.clientId)) {
+      continue;
+    }
+
+    await saveDocument(COLLECTION_NAME, {
+      clientId: sr.clientId,
+      clientName: sr.clientName || '',
+      weekId: targetWeekId,
+      requirements: {
+        posts: Number(sr.requirements?.posts) || 0,
+        reels: Number(sr.requirements?.reels) || 0,
+        stories: Number(sr.requirements?.stories) || 0,
+      },
+      notes: sr.notes || '',
+      status: sr.status || 'submitted',
+    });
+    copiedCount++;
+  }
+
+  await logAuditAction({
+    action: 'REQUIREMENTS_COPIED',
+    entityType: 'requirement',
+    entityId: targetWeekId,
+    description: `Copied ${copiedCount} client requirements from week ${sourceWeekId} to week ${targetWeekId} (Overwrite: ${overwrite})`,
+    adminId,
+  });
+
+  return { success: true, copiedCount };
+}
