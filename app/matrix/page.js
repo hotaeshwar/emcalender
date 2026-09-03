@@ -191,7 +191,6 @@ export default function WorkloadMatrixPage() {
               clients={clients}
               employees={activeEmployees}
               allocations={filteredAllocations}
-              dayName="MONDAY"
             />
           </div>
         ) : (

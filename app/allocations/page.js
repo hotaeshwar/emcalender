@@ -242,7 +242,6 @@ export default function AllocationsListPage() {
               clients={clients}
               employees={employees}
               allocations={filteredAllocations}
-              dayName="MONDAY"
             />
           </div>
         ) : viewMode === 'schedule' ? (

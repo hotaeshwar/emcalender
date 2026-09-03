@@ -7,8 +7,13 @@ export default function AgencyMatrixGrid({
   clients = [],
   employees = [],
   allocations = [],
-  dayName = 'MONDAY',
+  dayName = null,
 }) {
+  const displayHeader = dayName
+    ? dayName.toUpperCase()
+    : week?.name
+    ? `${week.name.toUpperCase()} (MON–SAT)`
+    : 'WEEKLY SCHEDULE';
   // Build staff list strictly from active employees passed in from Firebase
   const staffList = (employees || [])
     .filter((e) => e && e.name && e.status !== 'inactive')
@@ -153,7 +158,7 @@ export default function AgencyMatrixGrid({
                 S.NO
               </th>
               <th className="py-2.5 px-4 border-r border-slate-900 font-black bg-yellow-300 text-slate-900 uppercase text-sm tracking-wider w-56 whitespace-nowrap">
-                {dayName.toUpperCase()}
+                {displayHeader}
               </th>
 
               {/* Staff Member Header Columns */}

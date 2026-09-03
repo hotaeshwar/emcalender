@@ -421,10 +421,9 @@ export default function NewAllocationPage() {
 
                 <AgencyMatrixGrid
                   week={selectedWeek}
-                  clients={clients.length > 0 ? clients : DEFAULT_AGENCY_CLIENTS}
+                  clients={clients}
                   employees={employees}
                   allocations={allocationResult.allocations}
-                  dayName="MONDAY"
                 />
               </div>
             )}
